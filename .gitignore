@@ -1,0 +1,9 @@
+node_modules
+package-lock.json
+dist
+docs
+.env
+.DS_Store
+.vscode
+uploads
+app.log

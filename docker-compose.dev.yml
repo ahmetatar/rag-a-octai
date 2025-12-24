@@ -1,0 +1,77 @@
+version: '3.8'
+
+services:
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: chromadb
+    ports:
+      - "8000:8000"
+    volumes:
+      - chromadb-data:/chroma/chroma
+    environment:
+      - IS_PERSISTENT=TRUE
+      - ANONYMIZED_TELEMETRY=FALSE
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-data:/root/.ollama
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: raga-octi-api
+    ports:
+      - "1453:1453"
+      - "9229:9229"  # Debug port
+    volumes:
+      - ./src:/app/src
+      - ./node_modules:/app/node_modules
+    environment:
+      - PORT=1453
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      - EMBEDDING_MODEL=nomic-embed-text
+      - GENERATION_MODEL=gpt-4o-mini
+      - NODE_ENV=development
+      - RAG_TOP_K=4
+      - RAG_MAX_TOKENS=200
+      - OLLAMA_HOST=http://host.containers.internal:11434
+      - GEMINI_API_KEY=your_gemini_api_key_here
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
+    command: npm run dev -- --inspect=0.0.0.0:9229
+    depends_on:
+      chromadb:
+        condition: service_healthy
+      ollama:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
+networks:
+  app-network:
+    driver: bridge
+
+volumes:
+  chromadb-data:
+  ollama-data:
