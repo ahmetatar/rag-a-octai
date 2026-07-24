@@ -7,7 +7,8 @@ import { createEmbedding } from '../embedding';
 import { FileInfo, resolveFileHandler } from '../file-handlers';
 import { RagDataIngestor } from '../ingestion';
 import { OllamaLangModelRunner } from '../llm';
-import { ChromaVectorStore } from '../vector-store';
+import { Reranker } from '../reranking';
+import { ChromaVectorStore, SearchResult } from '../vector-store';
 import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
@@ -27,6 +28,10 @@ export interface RunEvalOptions {
   tenantId: string;
   /** When true, generate answers and score keyword coverage (needs a working LLM). */
   generateAnswers: boolean;
+  /** Optional reranker; when set, candidates are reranked before the top-K is scored. */
+  reranker?: Reranker;
+  /** Candidates to fetch before reranking down to topK (only used with a reranker). */
+  fetchK?: number;
 }
 
 /** Maps a file extension to a MIME type the handlers understand. */
@@ -104,7 +109,10 @@ async function scoreCase(
   langModel?: OllamaLangModelRunner
 ): Promise<EvalCaseResult> {
   const [queryVector] = await embedding.embed([evalCase.question]);
-  const results = await store.search(queryVector, options.topK, { tenantId: options.tenantId });
+  // Mirror the orchestrator: with a reranker, fetch a wider pool, rerank, then cut to topK.
+  const fetchK = options.reranker ? Math.max(options.topK, options.fetchK ?? options.topK) : options.topK;
+  const candidates = await store.search(queryVector, fetchK, { tenantId: options.tenantId });
+  const results = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
   const retrievedSources = results.map((result) => String(result.metadata?.source ?? ''));
 
   const result: EvalCaseResult = {
@@ -128,6 +136,25 @@ async function scoreCase(
   }
 
   return result;
+}
+
+/**
+ * Reranks candidates by relevance score when a reranker is provided; otherwise returns them
+ * in vector-search order. Mirrors the orchestrator so eval scores what production would.
+ * @param query The query.
+ * @param candidates The vector-search candidates.
+ * @param reranker Optional reranker.
+ * @returns Candidates ordered best-first.
+ */
+async function rerankCandidates(query: string, candidates: SearchResult[], reranker?: Reranker): Promise<SearchResult[]> {
+  if (!reranker || candidates.length === 0) {
+    return candidates;
+  }
+
+  const scores = await reranker.rank(query, candidates.map((candidate) => candidate.content));
+  return candidates
+    .map((candidate, index) => ({ ...candidate, score: scores[index] ?? 0 }))
+    .sort((a, b) => b.score - a.score);
 }
 
 /**

@@ -1,7 +1,7 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import config from '@app/config';
-import { createPdfPageFileHandler, createTextFileHandler, registerFileHandlers } from '@core/rag';
+import { createPdfPageFileHandler, createReranker, createTextFileHandler, registerFileHandlers } from '@core/rag';
 import { EvalReport, runEval } from '@core/rag/eval';
 import { logger } from '@infrastructure/logging';
 
@@ -24,6 +24,10 @@ async function main(): Promise<void> {
     'application/pdf': createPdfPageFileHandler(),
   });
 
+  // Honours RERANK_ENABLED/RERANK_MODEL_PATH, so `RERANK_ENABLED=true npm run eval` measures
+  // the reranked pipeline and can be compared against a plain run.
+  const reranker = await createReranker();
+
   const report = await runEval({
     corpusDir: path.join(EVAL_DIR, 'corpus'),
     datasetPath: path.join(EVAL_DIR, 'dataset.jsonl'),
@@ -31,8 +35,11 @@ async function main(): Promise<void> {
     topK: config.topK,
     tenantId: 'eval',
     generateAnswers: process.env.EVAL_GENERATE === 'true',
+    reranker,
+    fetchK: config.rerankFetchK,
   });
 
+  logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
   printReport(report);
   await writeReport(report);
 }

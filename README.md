@@ -247,6 +247,9 @@ curl http://localhost:3000/health
 | `RAG_MAX_TOP_K` | Upper bound a request may ask for via `topK` | `50` |
 | `MAX_QUERY_LENGTH` | Maximum query length in characters | `2000` |
 | `RETRIEVAL_THRESHOLD` | Minimum similarity score, higher is stricter (range `[-1, 1]`) | `0.35` |
+| `RERANK_ENABLED` | Rerank vector-search candidates with a cross-encoder before top-K | `false` |
+| `RERANK_MODEL_PATH` | Path to a GGUF reranker model (e.g. bge-reranker) | - |
+| `RERANK_FETCH_K` | Candidates fetched from vector search before reranking to top-K | `20` |
 | `MAX_TOKENS` | Maximum response tokens | `1000` |
 | `MAX_UPLOAD_FILE_SIZE_MB` | Maximum size of a single uploaded file | `25` |
 | `MAX_UPLOAD_FILES` | Maximum files per ingestion request | `10` |

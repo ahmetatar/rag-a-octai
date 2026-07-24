@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { RagOrchestrator } from './rag-orchestrator';
 import { BaseEmbedding } from './embedding';
 import { LangModelBase, PromptContext } from './llm';
+import { Reranker } from './reranking';
 import { SearchResult } from './vector-store';
 
 class StubEmbedding extends BaseEmbedding {
@@ -37,10 +38,11 @@ const DISTANT_MATCH: SearchResult = {
 };
 
 /**
- * Builds an orchestrator over a stubbed store.
+ * Builds an orchestrator over a stubbed store, optionally with a reranker.
  * @param results The search results the store returns.
+ * @param reranker Optional reranker to install.
  */
-function orchestratorOver(results: SearchResult[]) {
+function orchestratorOver(results: SearchResult[], reranker?: Reranker) {
   const langModel = new RecordingLangModel();
   const searchCalls: { topK: number; where: unknown }[] = [];
   const store = {
@@ -50,7 +52,21 @@ function orchestratorOver(results: SearchResult[]) {
     },
   } as never;
 
-  return { langModel, searchCalls, orchestrator: new RagOrchestrator(langModel, new StubEmbedding(), store) };
+  return {
+    langModel,
+    searchCalls,
+    orchestrator: new RagOrchestrator(langModel, new StubEmbedding(), store, reranker),
+  };
+}
+
+/** A reranker that scores documents by a lookup on their content. */
+class ScriptedReranker extends Reranker {
+  constructor(private readonly scoreByContent: Record<string, number>) {
+    super();
+  }
+  async rank(_query: string, documents: string[]): Promise<number[]> {
+    return documents.map((document) => this.scoreByContent[document] ?? 0);
+  }
 }
 
 describe('RagOrchestrator.query', () => {
@@ -134,5 +150,66 @@ describe('RagOrchestrator.query', () => {
     await orchestrator.query('question?', 3, 0.45);
 
     expect(searchCalls[0].where).toBeUndefined();
+  });
+});
+
+describe('RagOrchestrator.query — reranking', () => {
+  it('reorders candidates by reranker score, overriding vector order', async () => {
+    // Vector search ranks CLOSE_MATCH first (0.88 > 0.15), but the reranker judges the
+    // "distant" one more relevant; after reranking it should come first.
+    const reranker = new ScriptedReranker({
+      [CLOSE_MATCH.content]: 0.2,
+      [DISTANT_MATCH.content]: 0.9,
+    });
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], reranker);
+
+    const answer = await orchestrator.query('question?', 2, 0);
+
+    expect(answer.sources.map((source) => source.id)).toEqual(['chunk-distant', 'chunk-close']);
+    expect(answer.sources[0].score).toBeCloseTo(0.9);
+  });
+
+  it('widens the candidate fetch when a reranker is present', async () => {
+    const { orchestrator, searchCalls } = orchestratorOver([CLOSE_MATCH], new ScriptedReranker({}));
+
+    await orchestrator.query('question?', 3, 0);
+
+    // config.rerankFetchK defaults to 20, so a topK of 3 fetches 20 candidates to rerank.
+    expect(searchCalls[0].topK).toBe(20);
+  });
+
+  it('does not widen the fetch when no reranker is present', async () => {
+    const { orchestrator, searchCalls } = orchestratorOver([CLOSE_MATCH]);
+
+    await orchestrator.query('question?', 3, 0);
+
+    expect(searchCalls[0].topK).toBe(3);
+  });
+
+  it('applies the threshold to the reranker score', async () => {
+    const reranker = new ScriptedReranker({
+      [CLOSE_MATCH.content]: 0.9,
+      [DISTANT_MATCH.content]: 0.2,
+    });
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], reranker);
+
+    const answer = await orchestrator.query('question?', 5, 0.5);
+
+    // Only the doc the reranker scored >= 0.5 survives.
+    expect(answer.sources.map((source) => source.id)).toEqual(['chunk-close']);
+  });
+
+  it('falls back to vector order when the reranker throws', async () => {
+    const failing = new (class extends Reranker {
+      async rank(): Promise<number[]> {
+        throw new Error('reranker down');
+      }
+    })();
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], failing);
+
+    const answer = await orchestrator.query('question?', 2, 0);
+
+    // Vector order preserved (CLOSE_MATCH first), query still succeeds.
+    expect(answer.sources.map((source) => source.id)).toEqual(['chunk-close', 'chunk-distant']);
   });
 });

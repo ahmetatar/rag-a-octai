@@ -237,7 +237,24 @@ değişikliklerin gerçekten iyileştirip iyileştirmediğini görmek için base
 ---
 
 ### T4 — Retrieval kalitesi: reranking + hibrit arama
-**Durum:** Todo · **Öncelik:** P1 · **Bağımlılık:** T3 (önce ölçüm olmalı)
+**Durum:** 🟡 Reranking Done (2026-07); hibrit ertelendi · **Öncelik:** P1 · **Bağımlılık:** T3 (bitti)
+
+> **Yapıldı (reranking):** `Reranker` soyutlaması + `LlamaReranker` (node-llama-cpp'nin
+> `LlamaRankingContext.rankAll`'ı — **yeni ağır bağımlılık YOK**, GGUF bge-reranker kullanıyor).
+> Opt-in: `RERANK_ENABLED` + `RERANK_MODEL_PATH`. Orchestrator akışı: reranker varsa `RERANK_FETCH_K`
+> (varsayılan 20) aday çekiliyor → cross-encoder skorluyor → skora göre sıralanıp topK'ya iniliyor;
+> threshold artık rerank skoruna uygulanıyor. Reranker hatası → vektör sırasına graceful fallback
+> (query patlamıyor). Eval harness de reranker'ı uyguluyor (`RERANK_ENABLED=true npm run eval`).
+> **Ölçülen sonuç (T3 harness, gerçek bge-reranker-v2-m3 Q4):** MRR **0.950 → 1.000**; sun-energy
+> vakası RR 0.50 → 1.00 (vektör aramanın 2. sıraya koyduğu doğru chunk'ı reranker 1.'ye çekti).
+> **Doğrulama:** 144 test (9 yeni: reranker + orchestrator rerank/fetchK/threshold/fallback),
+> gerçek modelle e2e (reranker "Paris→France" 0.9998, alakasız 0.00002), OFF/ON eval karşılaştırması.
+>
+> **ERTELENDİ (hibrit BM25 + RRF):** ChromaDB'nin native BM25/full-text skoru yok (`whereDocument`
+> sadece substring). Gerçek hibrit için ya Chroma'nın yeni full-text index'i araştırılmalı ya ayrı
+> bir keyword index (ör. Postgres/pgvector'a geçişle — bkz T9) ya da uygulama-içi BM25. Bu, kendi
+> başına bir task boyutunda; reranking asıl kalite sıçramasını zaten sağladı. Hibrit'i ayrı bir
+> madde (T4b) olarak ele almayı öneriyorum; T9 (vektör DB kararı) ile birlikte değerlendirilebilir.
 
 **Amaç:** Dense-only aramanın üstüne reranking ve keyword/BM25 hibrit arama ekleyerek
 retrieval doğruluğunu artır.
@@ -397,7 +414,7 @@ vektör DB değerlendir (pgvector / Qdrant / Weaviate). Karar dokümanı + gerek
 | 1 | ✅ T1 Auth + tenant izolasyonu | P0 | Güvenlik açığı; her şeyden önce |
 | 2 | ✅ T2 Async ingest + dayanıklılık | P0 | İlk büyük dosyada patlar |
 | 3 | ✅ T3 Eval harness | P1 | Sonraki kalite işleri ölçülsün diye |
-| 4 | T4 Reranking + hybrid | P1 | Asıl kalite sıçraması (T3 ile ölçülerek) |
+| 4 | 🟡 T4 Reranking (hibrit ertelendi) | P1 | Asıl kalite sıçraması (T3 ile ölçüldü: MRR 0.95→1.0) |
 | 5 | T5 Streaming + multi-turn | P2 | UX olgunluğu |
 | 6 | T6 Observability | P2 | Ops görünürlüğü |
 | 7 | T7 Veri yönetimi + format | P2 | Uyumluluk (KVKK) + kapsam |

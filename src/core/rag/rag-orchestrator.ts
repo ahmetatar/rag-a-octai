@@ -2,6 +2,7 @@ import config from '@app/config';
 import { ChromaVectorStore, SearchResult } from './vector-store';
 import { BaseEmbedding, createEmbedding } from './embedding';
 import { LangModelBase, OllamaLangModelRunner, PromptContext } from './llm';
+import { createReranker, Reranker } from './reranking';
 import { logger } from '@infrastructure/logging';
 
 /** How many characters of a retrieved chunk are echoed back as a citation excerpt. */
@@ -41,8 +42,9 @@ export async function createRagOrchestrator(): Promise<RagOrchestrator> {
   const embedding = await createEmbedding();
   const store = new ChromaVectorStore(config.chromaHost, config.chromaPort, config.chromaCollection);
   const langModel = new OllamaLangModelRunner(config.generationModel, config.ollamaHost);
+  const reranker = await createReranker();
 
-  return new RagOrchestrator(langModel, embedding, store);
+  return new RagOrchestrator(langModel, embedding, store, reranker);
 }
 
 /**
@@ -57,7 +59,8 @@ export class RagOrchestrator {
   constructor(
     private readonly langModel: LangModelBase,
     private readonly embedding: BaseEmbedding,
-    private readonly store: ChromaVectorStore
+    private readonly store: ChromaVectorStore,
+    private readonly reranker?: Reranker
   ) {}
 
   /**
@@ -78,15 +81,22 @@ export class RagOrchestrator {
   ): Promise<RagAnswer> {
     //1. Embed the query
     const queryEmbedding = await this.embedding.embed([query]);
-    //2. Search the vector store, restricted to the tenant's own documents
+    //2. Search the vector store, restricted to the tenant's own documents. With a reranker,
+    //   fetch a wider candidate pool so it has more to choose from before we cut to top-K.
     const where = tenantId ? { tenantId } : undefined;
-    const results = await this.store.search(queryEmbedding[0], topK, where);
-    //3. (Optional) Keep only the documents that are similar ENOUGH to the query
+    const fetchK = this.reranker ? Math.max(topK, config.rerankFetchK) : topK;
+    const candidates = await this.store.search(queryEmbedding[0], fetchK, where);
+
+    //3. Rerank the candidates (cross-encoder) and keep the best top-K, or use vector order.
+    const results = (await this.rerank(query, candidates)).slice(0, topK);
+
+    //4. (Optional) Keep only the documents that are relevant ENOUGH to the query
     const minScore = threshold ?? 0;
     const filteredResults = results.filter((result) => result.score >= minScore);
 
     logger.info(
-      `Retrieved ${results.length} chunk(s), ${filteredResults.length} at or above similarity ${minScore}` +
+      `Retrieved ${candidates.length} candidate(s), reranked=${Boolean(this.reranker)}, ` +
+        `${filteredResults.length}/${results.length} kept at or above score ${minScore}` +
         `${results.length ? ` (best: ${results[0].score.toFixed(3)})` : ''}.`
     );
 
@@ -100,6 +110,33 @@ export class RagOrchestrator {
     const response = await this.langModel.generateResponse(promptContext);
 
     return { response, sources: filteredResults.map(toRagSource) };
+  }
+
+  /**
+   * Reranks candidates with the cross-encoder, replacing each result's score with the
+   * reranker's relevance score and sorting by it. Returns candidates unchanged (already in
+   * similarity order) when no reranker is configured or if reranking fails — a reranker
+   * problem should degrade to plain vector search, not fail the query.
+   *
+   * @param query The user query.
+   * @param candidates The vector-search candidates.
+   * @returns The results ordered best-first.
+   */
+  private async rerank(query: string, candidates: SearchResult[]): Promise<SearchResult[]> {
+    if (!this.reranker || candidates.length === 0) {
+      return candidates;
+    }
+
+    try {
+      const scores = await this.reranker.rank(query, candidates.map((candidate) => candidate.content));
+
+      return candidates
+        .map((candidate, index) => ({ ...candidate, score: scores[index] ?? 0 }))
+        .sort((a, b) => b.score - a.score);
+    } catch (error) {
+      logger.warn(`Reranking failed, falling back to vector order: ${error instanceof Error ? error.message : error}`);
+      return candidates;
+    }
   }
 }
 

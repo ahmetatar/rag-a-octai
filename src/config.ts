@@ -22,6 +22,16 @@ export default {
   topK: process.env.RAG_TOP_K ? parseInt(process.env.RAG_TOP_K) : 3,
   /** Upper bound a request may ask for via its own `topK` */
   maxTopK: process.env.RAG_MAX_TOP_K ? parseInt(process.env.RAG_MAX_TOP_K) : 50,
+  /**
+   * When true, a cross-encoder reranks the vector-search candidates before the top-K is
+   * chosen. Requires RERANK_MODEL_PATH; disabled by default so the app runs without a
+   * reranker model.
+   */
+  rerankEnabled: process.env.RERANK_ENABLED === 'true',
+  /** Path to a GGUF reranker model (e.g. bge-reranker) for the llama ranking context */
+  rerankModelPath: process.env.RERANK_MODEL_PATH ? path.resolve(process.env.RERANK_MODEL_PATH) : '',
+  /** How many candidates to pull from vector search before reranking down to top-K */
+  rerankFetchK: process.env.RERANK_FETCH_K ? parseInt(process.env.RERANK_FETCH_K) : 20,
   /** Maximum accepted length of a query string, in characters */
   maxQueryLength: process.env.MAX_QUERY_LENGTH ? parseInt(process.env.MAX_QUERY_LENGTH) : 2000,
   /** Embedding provider used for BOTH ingestion and querying ('ollama' | 'llama' | 'gemini') */
