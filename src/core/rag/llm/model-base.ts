@@ -21,16 +21,40 @@ export abstract class LangModelBase {
   abstract generateResponse(promptCtx: PromptContext): Promise<string>;
 
   /**
-   * Build context string from an array of documents.
-   * @param promptCtx - The prompt containing context and question.
-   * @returns {string} The constructed context string.
+   * Builds the context block from the retrieved documents.
+   *
+   * Each document is wrapped in a `<document index="N">` tag so the model sees a clear,
+   * enumerable boundary for every source (and can still cite it by index). Delimiter tokens
+   * occurring INSIDE a document are neutralised first — otherwise a malicious document could
+   * embed its own `</document>`/`</context>` to break out of the data section and have the
+   * text after it read as instructions. This is the core prompt-injection defence: the model
+   * is told (in the system prompt) that everything here is untrusted data, and the tagging
+   * makes that boundary unforgeable.
+   *
+   * @param promptCtx - The prompt containing the retrieved documents and the question.
+   * @returns {string} The constructed context string, empty when there are no documents.
    */
   protected buildContext(promptCtx: PromptContext): string {
     if (!promptCtx.sources?.length) {
       return '';
     }
 
-    const contextParts = promptCtx.sources.map((doc, idx) => `[${idx + 1}] ${doc.content}`);
+    const contextParts = promptCtx.sources.map(
+      (doc, idx) => `<document index="${idx + 1}">\n${neutraliseDelimiters(doc.content)}\n</document>`
+    );
     return contextParts.join('\n\n');
   }
+}
+
+/**
+ * Neutralises any context/document delimiter tags a document's own text contains, so the
+ * document cannot forge a boundary (e.g. a stray `</context>`) to escape the data section
+ * and inject instructions. The tag's angle brackets are stripped, leaving the words as inert
+ * text rather than removing content outright.
+ *
+ * @param content The raw document content.
+ * @returns The content with any delimiter tags defanged.
+ */
+function neutraliseDelimiters(content: string): string {
+  return content.replace(/<\/?(?:context|document)\b[^>]*>/gi, (tag) => tag.replace(/[<>]/g, ''));
 }
