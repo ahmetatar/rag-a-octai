@@ -4,11 +4,17 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 
 ## Features
 
-- 📄 **Document Ingestion** - Support for PDF and text file processing
-- 🔍 **Semantic Search** - Vector-based document retrieval using ChromaDB
-- 🤖 **AI-Powered Responses** - Generate intelligent responses using Ollama or Gemini models
-- 🧩 **Modular Architecture** - Extensible file handlers, chunkers, and embedding providers
-- 🐳 **Docker Support** - Easy deployment with Docker Compose
+- 📄 **Document Ingestion** - PDF and text processing with idempotent, per-source re-ingest
+- 🔍 **Semantic Search** - Vector retrieval using ChromaDB (cosine space)
+- 🎯 **Cross-Encoder Reranking** - Optional local reranker that reorders candidates by true
+  relevance (measured MRR 0.95 → 1.0). See [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
+- 🤖 **AI-Powered Responses** - Ollama, local llama.cpp, or Gemini; answers include cited sources
+- ⚡ **Async Ingestion** - Non-blocking uploads via a BullMQ + Redis job queue (`202` + job id)
+- 🛡️ **Multi-Tenant + Auth** - API-key auth with per-tenant document isolation
+- 🧱 **Resilient** - Timeouts + retry/backoff on every external call
+- 📊 **Evaluation Harness** - `npm run eval` scores retrieval quality; repeatable, diffable
+- 🧩 **Modular Architecture** - Extensible handlers, chunkers, embedding/rerank providers
+- 🐳 **Docker Support** - Compose stack (API + ChromaDB + Redis)
 
 ## Architecture
 
@@ -19,28 +25,36 @@ src/
 ├── app.ts                 # Express app assembly (routes + middleware)
 ├── core/rag/
 │   ├── ingestion.ts       # Document ingestion pipeline
-│   ├── rag-orchestrator.ts # Query processing orchestrator
+│   ├── rag-orchestrator.ts # Query pipeline: embed → search → rerank → generate
 │   ├── chunkers/          # Text chunking strategies
-│   ├── embedding/         # Embedding providers (Ollama, Llama, Gemini)
+│   ├── embedding/         # Embedding providers (Ollama, Llama, Gemini) + shared factory
+│   ├── reranking/         # Cross-encoder reranker (local GGUF via node-llama-cpp)
 │   ├── file-handlers/     # File type processors (PDF, text)
 │   ├── llm/               # Language model runners (Ollama, Llama)
+│   ├── jobs/              # Async ingest queue (BullMQ/Redis + in-memory drivers)
+│   ├── eval/              # Retrieval-quality evaluation harness + metrics
 │   ├── text-processors/   # Text preprocessing utilities
 │   └── vector-store/      # ChromaDB vector store integration
 ├── infrastructure/
-│   ├── async/             # Lazy singleton helper
-│   ├── http/              # Error handling + graceful shutdown
+│   ├── async/             # Lazy singleton + timeout/retry (resilience) helpers
+│   ├── http/              # Auth, error handling, graceful shutdown
 │   └── logging/           # Winston logging setup
-└── routes/
-    ├── health.route.ts    # Liveness probe
-    ├── ingestion.route.ts # Document upload endpoint
-    └── query.route.ts     # Query endpoint
+├── routes/
+│   ├── health.route.ts    # Liveness probe
+│   ├── ingestion.route.ts # Async upload + job status endpoints
+│   └── query.route.ts     # Query endpoint
+└── eval.ts                # `npm run eval` entry point
+
+eval/                      # Evaluation corpus + dataset (see EVAL_AND_RERANKING.md)
 ```
 
 ## Prerequisites
 
 - Node.js 22+
-- Docker / Podman (for ChromaDB and Ollama)
-- Ollama (for local LLM inference) or Gemini API key
+- Docker / Podman (for ChromaDB, Redis, and Ollama)
+- Redis (for the default `bull` async ingest queue; or set `QUEUE_DRIVER=memory`)
+- Ollama or local llama.cpp models (for inference/embeddings) — or a Gemini API key
+- Optional: a GGUF reranker model to enable cross-encoder reranking
 
 ## Installation
 
@@ -283,22 +297,21 @@ npm run test:ui
 npm run test:coverage
 ```
 
-## Evaluation
+## Evaluation & Reranking
 
-A retrieval-quality harness lives in `eval/`. It ingests `eval/corpus/` into a dedicated
-collection, scores the questions in `eval/dataset.jsonl`, prints a table, and writes
-`eval/results/latest.json` so runs can be compared (e.g. before/after a retrieval change).
+The project ships a retrieval-quality **evaluation harness** (`npm run eval`) and an optional
+**cross-encoder reranker**. Together they let you measure retrieval quality and prove that a
+change (like enabling reranking) actually improves it.
 
 ```bash
-# Retrieval metrics only (needs ChromaDB + an embedding provider)
+# Score retrieval quality (needs ChromaDB + an embedding provider)
 npm run eval
 
-# Also generate answers and score keyword coverage (needs a reachable LLM)
-EVAL_GENERATE=true npm run eval
+# Same, but with reranking enabled — compare the MRR against the plain run
+RERANK_ENABLED=true RERANK_MODEL_PATH=./models/<reranker>.gguf npm run eval
 ```
 
-Metrics: precision@k, recall@k, hit@k, MRR, and (with generation) keyword coverage. Extend
-coverage by adding files to `eval/corpus/` and cases to `eval/dataset.jsonl`.
+👉 **Full guide with a step-by-step walkthrough:** [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 
 ## Docker
 
