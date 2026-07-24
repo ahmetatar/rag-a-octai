@@ -4,14 +4,20 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 
 ## Features
 
-- 📄 **Document Ingestion** - PDF and text processing with idempotent, per-source re-ingest
-- 🔍 **Semantic Search** - Vector retrieval using ChromaDB (cosine space)
+- 📄 **Document Ingestion** - PDF, text, and HTML processing with idempotent, per-source re-ingest
+- 🗂️ **Document Management** - List and delete ingested documents per tenant (right-to-be-forgotten)
+- 🔍 **Semantic Search** - Vector retrieval behind a pluggable `VectorStore` interface
+  (ChromaDB today, cosine space; see [ADR 0001](docs/adr/0001-vector-store-abstraction-and-backend-strategy.md))
 - 🎯 **Cross-Encoder Reranking** - Optional local reranker that reorders candidates by true
   relevance (measured MRR 0.95 → 1.0). See [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 - 🤖 **AI-Powered Responses** - Ollama, local llama.cpp, or Gemini; answers include cited sources
 - ⚡ **Async Ingestion** - Non-blocking uploads via a BullMQ + Redis job queue (`202` + job id)
 - 🛡️ **Multi-Tenant + Auth** - API-key auth with per-tenant document isolation
+- 🔒 **Prompt-Injection Hardening** - Retrieved context is fenced as untrusted data, and the
+  model is told never to obey instructions inside it
 - 🧱 **Resilient** - Timeouts + retry/backoff on every external call
+- 🛰️ **Observability** - Prometheus `/metrics`, a dependency readiness probe, and a correlation
+  id on every request/log
 - 📊 **Evaluation Harness** - `npm run eval` scores retrieval quality; repeatable, diffable
 - 🧩 **Modular Architecture** - Extensible handlers, chunkers, embedding/rerank providers
 - 🐳 **Docker Support** - Compose stack (API + ChromaDB + Redis)
@@ -29,22 +35,25 @@ src/
 │   ├── chunkers/          # Text chunking strategies
 │   ├── embedding/         # Embedding providers (Ollama, Llama, Gemini) + shared factory
 │   ├── reranking/         # Cross-encoder reranker (local GGUF via node-llama-cpp)
-│   ├── file-handlers/     # File type processors (PDF, text)
-│   ├── llm/               # Language model runners (Ollama, Llama)
+│   ├── file-handlers/     # File type processors (PDF, text, HTML)
+│   ├── llm/               # Language model runners (Ollama, Llama) + prompt hardening
 │   ├── jobs/              # Async ingest queue (BullMQ/Redis + in-memory drivers)
 │   ├── eval/              # Retrieval-quality evaluation harness + metrics
 │   ├── text-processors/   # Text preprocessing utilities
-│   └── vector-store/      # ChromaDB vector store integration
+│   └── vector-store/      # VectorStore interface + ChromaDB implementation
 ├── infrastructure/
 │   ├── async/             # Lazy singleton + timeout/retry (resilience) helpers
 │   ├── http/              # Auth, error handling, graceful shutdown
+│   ├── observability/     # Prometheus metrics, readiness check, correlation id
 │   └── logging/           # Winston logging setup
 ├── routes/
-│   ├── health.route.ts    # Liveness probe
+│   ├── health.route.ts    # Liveness + readiness probes
 │   ├── ingestion.route.ts # Async upload + job status endpoints
-│   └── query.route.ts     # Query endpoint
+│   ├── query.route.ts     # Query endpoint
+│   └── documents.route.ts # List + delete ingested documents (tenant-scoped)
 └── eval.ts                # `npm run eval` entry point
 
+docs/adr/                  # Architecture Decision Records
 eval/                      # Evaluation corpus + dataset (see EVAL_AND_RERANKING.md)
 ```
 
@@ -224,21 +233,53 @@ the list is empty and the model is asked to say it cannot answer.
 **Errors:** `400` invalid body (missing/empty `query`, `topK` out of range, `threshold`
 outside `[-1, 1]`, query longer than `MAX_QUERY_LENGTH`) · `500` internal error.
 
-#### Health
+#### Manage Documents
 
-Liveness probe. Answers as long as the process can serve requests; it does not call
-ChromaDB or Ollama.
+List or delete the documents a tenant has ingested. Both are behind auth (when enabled) and
+scoped to the requesting tenant.
 
 ```bash
-curl http://localhost:3000/health
+# List ingested documents (with per-source chunk counts)
+curl http://localhost:3000/documents
+
+# Delete every chunk of one document (right-to-be-forgotten)
+curl -X DELETE http://localhost:3000/documents/handbook.pdf
 ```
 
-**Response:**
+**List response:**
 ```json
-{
-  "status": "ok",
-  "uptime": 12.34
-}
+{ "documents": [ { "source": "handbook.pdf", "chunks": 12 } ] }
+```
+
+**Delete response:** `{ "status": "ok", "source": "handbook.pdf", "deletedChunks": 12 }`
+(`404` when the tenant has no document by that name).
+
+#### Health & Readiness
+
+`GET /health` is a **liveness** probe: it answers as long as the process can serve requests
+and deliberately does not call ChromaDB or Ollama. `GET /health/ready` is a **readiness**
+probe: it pings the backing dependencies and returns `503` while any is down, so an
+orchestrator can stop routing traffic without restarting the container.
+
+```bash
+curl http://localhost:3000/health        # {"status":"ok","uptime":12.34}
+curl http://localhost:3000/health/ready   # 200 when ready, 503 otherwise
+```
+
+**Readiness response:**
+```json
+{ "ready": true, "dependencies": [ { "name": "chroma", "ok": true }, { "name": "ollama", "ok": true } ] }
+```
+
+#### Metrics
+
+`GET /metrics` exposes Prometheus metrics (unauthenticated, like `/health`): default process
+metrics, an HTTP request-duration histogram (method/route/status), and a retrieval top-score
+histogram. Every request also carries an `x-request-id` correlation id (echoed from an inbound
+`x-correlation-id`/`x-request-id` when present) that appears in the logs.
+
+```bash
+curl http://localhost:3000/metrics
 ```
 
 ## Configuration Options
@@ -257,6 +298,7 @@ curl http://localhost:3000/health
 | `JOB_ATTEMPTS` | Retry attempts for a failed ingest job | `3` |
 | `EXTERNAL_TIMEOUT_MS` | Timeout per external call (Ollama/Chroma) | `30000` |
 | `EXTERNAL_RETRY_ATTEMPTS` | Retry attempts per external call | `3` |
+| `READINESS_TIMEOUT_MS` | Timeout per dependency ping in `/health/ready` | `3000` |
 | `RAG_TOP_K` | Number of documents to retrieve | `3` |
 | `RAG_MAX_TOP_K` | Upper bound a request may ask for via `topK` | `50` |
 | `MAX_QUERY_LENGTH` | Maximum query length in characters | `2000` |
@@ -276,7 +318,7 @@ curl http://localhost:3000/health
 | `CHROMADB_HOST` | ChromaDB host | `localhost` |
 | `CHROMADB_PORT` | ChromaDB port | `8000` |
 | `CHROMA_COLLECTION` | ChromaDB collection name | `docs` |
-| `AUTH_ENABLED` | Require an API key on `/ingest` and `/query` and scope each request to its tenant | `false` |
+| `AUTH_ENABLED` | Require an API key on `/ingest`, `/query`, `/documents` and scope each request to its tenant | `false` |
 | `API_KEYS` | Comma-separated `key:tenantId` pairs (e.g. `sk-a:acme,sk-b:globex`) | - |
 | `DEFAULT_TENANT` | Tenant assigned to every request when auth is disabled | `default` |
 | `CORS_ORIGINS` | Comma-separated allowed origins (`*` for any, empty disables CORS) | - |
@@ -334,6 +376,7 @@ This starts ChromaDB, Ollama, and the API server with hot reloading.
 ## Supported File Types
 
 - **Text files** (`.txt`, `text/plain`)
+- **HTML files** (`.html`, `text/html`) — markup stripped to readable text (scripts/styles removed)
 - **PDF files** (`.pdf`, `application/pdf`)
   - Standard PDF processing
   - Page-by-page PDF processing (with metadata)
@@ -360,7 +403,9 @@ This starts ChromaDB, Ollama, and the API server with hot reloading.
 - **Vector Database**: ChromaDB
 - **LLM Runtime**: Ollama
 - **Embeddings**: Ollama / Google Gemini
-- **File Processing**: pdf-parse
+- **File Processing**: pdf-parse, node-html-parser
+- **Async Queue**: BullMQ + Redis (in-memory fallback)
+- **Observability**: prom-client (Prometheus)
 - **Logging**: Winston
 - **Testing**: Vitest
 - **Validation**: Zod
