@@ -70,4 +70,43 @@ export default {
    * proxy's. Defaults to 0 (no proxy trusted).
    */
   trustProxy: process.env.TRUST_PROXY ? parseInt(process.env.TRUST_PROXY) : 0,
+  /**
+   * When true, /ingest and /query require a valid API key and each request is scoped to the
+   * key's tenant. When false the service runs single-tenant: every request is assigned the
+   * default tenant, so the isolation code path still applies uniformly.
+   */
+  authEnabled: process.env.AUTH_ENABLED === 'true',
+  /**
+   * API key → tenant id map, parsed from `API_KEYS` as comma-separated `key:tenantId` pairs
+   * (e.g. `sk-a:acme,sk-b:globex`). Only consulted when authEnabled is true.
+   */
+  apiKeys: parseApiKeys(process.env.API_KEYS),
+  /** Tenant assigned to every request when auth is disabled (single-tenant mode). */
+  defaultTenant: process.env.DEFAULT_TENANT || 'default',
 };
+
+/**
+ * Parses the `API_KEYS` environment variable into a key → tenant lookup.
+ * @param raw Comma-separated `key:tenantId` pairs.
+ * @returns A map from API key to tenant id.
+ */
+function parseApiKeys(raw?: string): Record<string, string> {
+  const keys: Record<string, string> = {};
+
+  for (const pair of (raw || '').split(',')) {
+    const trimmed = pair.trim();
+    if (!trimmed) continue;
+
+    // Split on the FIRST colon only, so a key containing colons is preserved.
+    const separator = trimmed.indexOf(':');
+    if (separator <= 0 || separator === trimmed.length - 1) continue;
+
+    const key = trimmed.slice(0, separator).trim();
+    const tenantId = trimmed.slice(separator + 1).trim();
+    if (key && tenantId) {
+      keys[key] = tenantId;
+    }
+  }
+
+  return keys;
+}

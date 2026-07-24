@@ -42,9 +42,15 @@ const DISTANT_MATCH: SearchResult = {
  */
 function orchestratorOver(results: SearchResult[]) {
   const langModel = new RecordingLangModel();
-  const store = { search: async () => results } as never;
+  const searchCalls: { topK: number; where: unknown }[] = [];
+  const store = {
+    search: async (_vector: number[], topK: number, where?: unknown) => {
+      searchCalls.push({ topK, where });
+      return results;
+    },
+  } as never;
 
-  return { langModel, orchestrator: new RagOrchestrator(langModel, new StubEmbedding(), store) };
+  return { langModel, searchCalls, orchestrator: new RagOrchestrator(langModel, new StubEmbedding(), store) };
 }
 
 describe('RagOrchestrator.query', () => {
@@ -112,5 +118,21 @@ describe('RagOrchestrator.query', () => {
     await orchestrator.query('question?', 3, 0.45, 128);
 
     expect(langModel.lastPrompt?.maxTokens).toBe(128);
+  });
+
+  it('restricts the search to the requesting tenant', async () => {
+    const { orchestrator, searchCalls } = orchestratorOver([CLOSE_MATCH]);
+
+    await orchestrator.query('question?', 3, 0.45, 128, 'acme');
+
+    expect(searchCalls[0].where).toEqual({ tenantId: 'acme' });
+  });
+
+  it('does not filter by tenant when none is given', async () => {
+    const { orchestrator, searchCalls } = orchestratorOver([CLOSE_MATCH]);
+
+    await orchestrator.query('question?', 3, 0.45);
+
+    expect(searchCalls[0].where).toBeUndefined();
   });
 });

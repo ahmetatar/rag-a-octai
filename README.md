@@ -237,6 +237,9 @@ curl http://localhost:3000/health
 | `CHROMADB_HOST` | ChromaDB host | `localhost` |
 | `CHROMADB_PORT` | ChromaDB port | `8000` |
 | `CHROMA_COLLECTION` | ChromaDB collection name | `docs` |
+| `AUTH_ENABLED` | Require an API key on `/ingest` and `/query` and scope each request to its tenant | `false` |
+| `API_KEYS` | Comma-separated `key:tenantId` pairs (e.g. `sk-a:acme,sk-b:globex`) | - |
+| `DEFAULT_TENANT` | Tenant assigned to every request when auth is disabled | `default` |
 | `CORS_ORIGINS` | Comma-separated allowed origins (`*` for any, empty disables CORS) | - |
 | `RATE_LIMIT_WINDOW_MS` | Rate-limit window in milliseconds | `60000` |
 | `RATE_LIMIT_MAX` | Max requests per IP per window | `100` |

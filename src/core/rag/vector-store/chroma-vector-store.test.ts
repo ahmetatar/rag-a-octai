@@ -22,7 +22,7 @@ vi.mock('chromadb', () => ({
 function collectionReturning(distances: (number | null)[], configuration: unknown = { hnsw: { space: 'cosine' } }) {
   return {
     configuration,
-    query: vi.fn(async () => ({
+    query: vi.fn(async (_args: Record<string, unknown>) => ({
       ids: [distances.map((_, index) => `chunk-${index}`)],
       documents: [distances.map((_, index) => `document ${index}`)],
       metadatas: [distances.map((_, index) => ({ source: 'doc.pdf', page: index + 1 }))],
@@ -171,5 +171,48 @@ describe('ChromaVectorStore.deleteBySource', () => {
     await store.deleteBySource('handbook.pdf');
 
     expect(recording.delete).toHaveBeenCalledWith({ where: { source: 'handbook.pdf' } });
+  });
+
+  it('scopes the deletion to a tenant when given', async () => {
+    const recording = recordingCollection();
+    collection = recording;
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    await store.deleteBySource('handbook.pdf', 'acme');
+
+    expect(recording.delete).toHaveBeenCalledWith({
+      where: { $and: [{ source: 'handbook.pdf' }, { tenantId: 'acme' }] },
+    });
+  });
+});
+
+describe('ChromaVectorStore.search — tenant filter', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('forwards a metadata filter to the query', async () => {
+    const recording = { ...collectionReturning([0.1]), query: vi.fn(async (_args: Record<string, unknown>) => ({
+      ids: [['chunk-0']],
+      documents: [['doc']],
+      metadatas: [[{ source: 'a', tenantId: 'acme' }]],
+      distances: [[0.1]],
+    })) };
+    collection = recording;
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    await store.search([0.1], 3, { tenantId: 'acme' });
+
+    expect(recording.query.mock.calls[0][0]).toMatchObject({ where: { tenantId: 'acme' } });
+  });
+
+  it('omits the where clause when no filter is given', async () => {
+    const recording = { ...collectionReturning([0.1]) };
+    collection = recording;
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    await store.search([0.1], 3);
+
+    expect(recording.query.mock.calls[0][0]).not.toHaveProperty('where');
   });
 });

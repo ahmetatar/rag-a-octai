@@ -66,13 +66,21 @@ export class RagOrchestrator {
    * @param topK The number of top documents to retrieve
    * @param threshold Optional MINIMUM similarity score a document must reach to be used
    * @param maxTokens Optional maximum number of tokens for the response
+   * @param tenantId Optional tenant whose documents the search is restricted to
    * @returns The generated answer together with the sources it was based on
    */
-  async query(query: string, topK: number, threshold?: number, maxTokens?: number): Promise<RagAnswer> {
+  async query(
+    query: string,
+    topK: number,
+    threshold?: number,
+    maxTokens?: number,
+    tenantId?: string
+  ): Promise<RagAnswer> {
     //1. Embed the query
     const queryEmbedding = await this.embedding.embed([query]);
-    //2. Search the vector store
-    const results = await this.store.search(queryEmbedding[0], topK);
+    //2. Search the vector store, restricted to the tenant's own documents
+    const where = tenantId ? { tenantId } : undefined;
+    const results = await this.store.search(queryEmbedding[0], topK, where);
     //3. (Optional) Keep only the documents that are similar ENOUGH to the query
     const minScore = threshold ?? 0;
     const filteredResults = results.filter((result) => result.score >= minScore);

@@ -1,6 +1,7 @@
 import { createRagOrchestrator } from '@core/rag';
 import { logger } from '@infrastructure/logging';
 import { lazySingleton } from '@infrastructure/async';
+import { tenantOf } from '@infrastructure/http';
 import express from 'express';
 import { z } from 'zod';
 import config from '@app/config';
@@ -69,7 +70,8 @@ router.post('/', async (req, res) => {
       query,
       topK ?? config.topK,
       threshold ?? config.retrievalThreshold,
-      config.maxTokens
+      config.maxTokens,
+      tenantOf(res.locals)
     );
 
     res.json(answer);

@@ -21,6 +21,7 @@ const FILE: FileInfo = {
 function ingestorOver(chunks: Document[], embed: (texts: string[]) => number[][], batchSize = 64) {
   const upserted: UpsertItem[][] = [];
   const deletedSources: string[] = [];
+  const deletedTenants: (string | undefined)[] = [];
   const embedBatches: string[][] = [];
 
   class StubEmbedding extends BaseEmbedding {
@@ -41,12 +42,15 @@ function ingestorOver(chunks: Document[], embed: (texts: string[]) => number[][]
     new StubEmbedding(),
     {
       upsert: async (items: UpsertItem[]) => void upserted.push(items),
-      deleteBySource: async (source: string) => void deletedSources.push(source),
+      deleteBySource: async (source: string, tenantId?: string) => {
+        deletedSources.push(source);
+        deletedTenants.push(tenantId);
+      },
     } as never,
     batchSize
   );
 
-  return { ingestor, upserted, deletedSources, embedBatches };
+  return { ingestor, upserted, deletedSources, deletedTenants, embedBatches };
 }
 
 describe('RagDataIngestor.ingest', () => {
@@ -92,6 +96,16 @@ describe('RagDataIngestor.ingest', () => {
     await ingestor.ingest([FILE]);
 
     expect(deletedSources).toEqual(['doc.txt']);
+  });
+
+  it('tags every chunk with the tenant and scopes the delete to it', async () => {
+    const chunks: Document[] = [{ content: 'alpha' }, { content: 'beta' }];
+    const { ingestor, upserted, deletedTenants } = ingestorOver(chunks, (texts) => texts.map(() => [0]));
+
+    await ingestor.ingest([FILE], undefined, 'acme');
+
+    expect(upserted.flat().every((item) => item.metadata?.tenantId === 'acme')).toBe(true);
+    expect(deletedTenants).toEqual(['acme']);
   });
 
   it('embeds in batches of the configured size, preserving order', async () => {

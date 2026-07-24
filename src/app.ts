@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import config from '@app/config';
 import * as routes from '@routes/index';
 import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler } from '@core/rag';
-import { errorHandler, notFoundHandler } from '@infrastructure/http';
+import { authMiddleware, errorHandler, notFoundHandler } from '@infrastructure/http';
 
 /**
  * Registers the file handlers the application ships with.
@@ -67,9 +67,12 @@ export function createApp(): Express {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // /health stays unauthenticated so liveness/readiness probes work without a key. The data
+  // routes sit behind auth, which also resolves the request's tenant.
   app.use('/health', routes.healthRouter);
-  app.use('/ingest', routes.ingestionRouter);
-  app.use('/query', routes.queryRouter);
+  app.use('/ingest', authMiddleware(), routes.ingestionRouter);
+  app.use('/query', authMiddleware(), routes.queryRouter);
 
   // Both must stay last: Express matches middleware in registration order, so a route
   // registered after them would never be reached.

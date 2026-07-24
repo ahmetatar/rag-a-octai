@@ -9,6 +9,7 @@ import {
 } from '@core/rag';
 import { logger } from '@infrastructure/logging';
 import { lazySingleton } from '@infrastructure/async';
+import { tenantOf } from '@infrastructure/http';
 
 const router = express.Router();
 
@@ -122,7 +123,7 @@ router.post('/', handleUpload, async (req, res) => {
 
   try {
     const ragDataIngestor = await getRagDataIngestor();
-    await ragDataIngestor.ingest(files, req.query as HandlerResolveParameters);
+    await ragDataIngestor.ingest(files, req.query as HandlerResolveParameters, tenantOf(res.locals));
   } catch (error) {
     // Log the cause server-side; the client only learns that ingestion failed, since the
     // error may carry internal paths, hostnames or stack traces.

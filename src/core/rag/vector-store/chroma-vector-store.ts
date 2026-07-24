@@ -1,5 +1,5 @@
 import { Document } from '../file-handlers';
-import { ChromaClient, Collection } from 'chromadb';
+import { ChromaClient, Collection, Where } from 'chromadb';
 import { logger } from '@infrastructure/logging';
 
 /**
@@ -113,25 +113,30 @@ export class ChromaVectorStore {
    * re-ingested document produces fewer of them.
    *
    * @param source The `source` metadata value identifying the document.
+   * @param tenantId Optional tenant to scope the deletion to, so one tenant re-ingesting a
+   * document cannot delete another tenant's document that happens to share a name.
    */
-  async deleteBySource(source: string): Promise<void> {
+  async deleteBySource(source: string, tenantId?: string): Promise<void> {
     const collection = await this.getCollection();
-    await collection.delete({ where: { source } });
+    const where: Where = tenantId ? { $and: [{ source }, { tenantId }] } : { source };
+    await collection.delete({ where });
   }
 
   /**
    * Searches the ChromaDB collection for the most similar items to the given query vector.
    * @param queryVector The query embedding vector.
    * @param topK The number of top similar items to retrieve.
+   * @param where Optional metadata filter (e.g. `{ tenantId }`) constraining the search.
    * @returns {SearchResult[]} An array of search results with id, text, metadata, distance and
    * similarity score, ordered from the closest match to the furthest.
    */
-  async search(queryVector: number[], topK: number): Promise<SearchResult[]> {
+  async search(queryVector: number[], topK: number, where?: Where): Promise<SearchResult[]> {
     const collection = await this.getCollection();
 
     const results = await collection.query({
       queryEmbeddings: [queryVector],
       nResults: topK,
+      ...(where ? { where } : {}),
     });
 
     const out: SearchResult[] = [];

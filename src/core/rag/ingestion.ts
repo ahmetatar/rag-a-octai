@@ -48,14 +48,16 @@ export class RagDataIngestor {
    *
    * @param files The array of files to ingest.
    * @param params Parameters passed to factory-registered file handlers.
+   * @param tenantId Tenant the documents belong to; tagged on every chunk and used to scope
+   * the delete-then-upsert so tenants stay isolated.
    * @returns A promise that resolves when ingestion is complete.
    */
-  async ingest(files: FileInfo[], params?: HandlerResolveParameters) {
+  async ingest(files: FileInfo[], params?: HandlerResolveParameters, tenantId?: string) {
     if (!files || files.length === 0) {
       throw new Error('No files provided for ingestion');
     }
 
-    const allChunks = await this.buildChunks(files, params);
+    const allChunks = await this.buildChunks(files, params, tenantId);
 
     if (allChunks.length === 0) {
       logger.warn('Ingestion produced no chunks; nothing to store.');
@@ -67,7 +69,7 @@ export class RagDataIngestor {
     const sources = new Set(allChunks.map((chunk) => String(chunk.metadata?.source ?? '')));
     for (const source of sources) {
       if (source) {
-        await this.store.deleteBySource(source);
+        await this.store.deleteBySource(source, tenantId);
       }
     }
 
@@ -101,9 +103,14 @@ export class RagDataIngestor {
    *
    * @param files The files to process.
    * @param params Parameters passed to factory-registered file handlers.
+   * @param tenantId Tenant tagged on every chunk's metadata for later isolation.
    * @returns The chunks from all files, in order.
    */
-  private async buildChunks(files: FileInfo[], params?: HandlerResolveParameters): Promise<Document[]> {
+  private async buildChunks(
+    files: FileInfo[],
+    params?: HandlerResolveParameters,
+    tenantId?: string
+  ): Promise<Document[]> {
     const allChunks: Document[] = [];
     // Chunk indices run per source so ids stay stable regardless of upload order.
     const indexBySource = new Map<string, number>();
@@ -118,6 +125,7 @@ export class RagDataIngestor {
         const chunks = await this.chunker.chunk(doc.content, {
           source: file.originalname,
           mimeType: file.mimetype,
+          ...(tenantId ? { tenantId } : {}),
           ...doc.metadata,
         });
 

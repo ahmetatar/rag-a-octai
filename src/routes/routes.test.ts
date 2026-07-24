@@ -1,8 +1,17 @@
 import { AddressInfo } from 'net';
 import { Server } from 'http';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
+import config from '@app/config';
 import { createApp } from '@app/app';
+
+const authConfig = { authEnabled: config.authEnabled, apiKeys: config.apiKeys };
+
+afterEach(() => {
+  // Auth is toggled per test via config; restore the defaults so other suites are unaffected.
+  config.authEnabled = authConfig.authEnabled;
+  config.apiKeys = authConfig.apiKeys;
+});
 
 // The upload limits these tests assert against (1 MB, 2 files) are set in vitest.config.ts:
 // the ingestion route reads them from config at import time, so they must already be in
@@ -52,6 +61,50 @@ describe('GET /health', () => {
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({ status: 'ok' });
+  });
+});
+
+describe('authentication (when enabled)', () => {
+  it('rejects /query without a key', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await postJson('/query', { query: 'hello' });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('rejects /ingest without a key', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await fetch(`${baseUrl}/ingest`, { method: 'POST', body: new FormData() });
+
+    expect(response.status).toBe(401);
+  });
+
+  it('lets a valid key through to request validation', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    // A valid key passes auth; the empty body then fails validation with 400, which proves
+    // the request got past the auth layer (401 would mean it did not).
+    const response = await fetch(`${baseUrl}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'sk-acme' },
+      body: JSON.stringify({}),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('leaves /health open without a key', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await fetch(`${baseUrl}/health`);
+
+    expect(response.status).toBe(200);
   });
 });
 
