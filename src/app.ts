@@ -6,6 +6,7 @@ import config from '@app/config';
 import * as routes from '@routes/index';
 import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler } from '@core/rag';
 import { authMiddleware, errorHandler, notFoundHandler } from '@infrastructure/http';
+import { correlationIdMiddleware, metricsMiddleware, metricsHandler } from '@infrastructure/observability';
 
 /**
  * Registers the file handlers the application ships with.
@@ -51,6 +52,12 @@ export function createApp(): Express {
   // deployed behind a reverse proxy.
   app.set('trust proxy', config.trustProxy);
 
+  // Assign a correlation id first of all, so every subsequent middleware and log line —
+  // including rejections and the error handler — can be tied to one request. The metrics
+  // timer sits right after it so the recorded duration spans the whole request.
+  app.use(correlationIdMiddleware());
+  app.use(metricsMiddleware());
+
   // Security headers, CORS and a per-IP rate limit come first so they apply to every
   // route, including the ones that reject bad input.
   app.use(helmet());
@@ -67,6 +74,10 @@ export function createApp(): Express {
 
   app.use(express.json());
   app.use(express.urlencoded({ extended: true }));
+
+  // Prometheus scrape endpoint. Unauthenticated (like /health) because a scraper carries no
+  // API key; it still gets the security headers and rate limit registered above.
+  app.get('/metrics', metricsHandler);
 
   // /health stays unauthenticated so liveness/readiness probes work without a key. The data
   // routes sit behind auth, which also resolves the request's tenant.

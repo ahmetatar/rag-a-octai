@@ -287,7 +287,14 @@ ayrımlarda zayıf. Reranking + hybrid, RAG kalitesindeki en büyük tek sıçra
 ---
 
 ### T5 — Streaming yanıt + çok-turlu (multi-turn) oturum
-**Durum:** Todo · **Öncelik:** P2 · **Bağımlılık:** yok
+**Durum:** ⏸️ Ertelendi (2026-07) · **Öncelik:** P2 · **Bağımlılık:** yok
+
+> **Neden ertelendi:** Streaming bir UX özelliği (correctness/robustness değil) ve proje
+> şu an token'ları tüketecek bir chat UI/istemci olmayan bir backend API servisi. İstemci
+> yokken sıfır kullanıcı değeri üretir. Tasarım stabil (Ollama runner zaten `stream?: false`
+> tipini kullanıyor → `stream: true` yolu doğal açık), sonradan ~1 turda eklenebilir.
+> **Koşul:** Bir chat istemcisi/UI gündeme geldiğinde ele al. Multi-turn de istemci-güdümlü
+> (geçmişi kim gönderecek?) — birlikte değerlendir.
 
 **Amaç:** `/query` yanıtını token-by-token akıt (SSE); opsiyonel konuşma geçmişi desteği.
 
@@ -310,7 +317,32 @@ takip sorularını mümkün kılar.
 ---
 
 ### T6 — Observability: metrik + tracing + readiness + correlation id
-**Durum:** Todo · **Öncelik:** P2 · **Bağımlılık:** yok
+**Durum:** 🟢 Metrik + readiness + correlation id Done (2026-07); OTel tracing ertelendi · **Öncelik:** P2 · **Bağımlılık:** yok
+
+> **Yapıldı:** Yeni `src/infrastructure/observability/` katmanı.
+> - **Correlation id:** `correlationIdMiddleware` (en başta mount) gelen `x-correlation-id`/
+>   `x-request-id`'yi benimser, yoksa `randomUUID` üretir; `res.locals` + yanıt `x-request-id`
+>   header'ına yazar. **`AsyncLocalStorage`** ile id request bağlamında taşınır; `default-logger`
+>   her satıra `[cid]` ekler (embed→search→generate zinciri elle parametre geçmeden bağlanır).
+>   Döngüyü önlemek için logger, barrel yerine `observability/correlation-id` dosyasından import eder.
+> - **Readiness:** `GET /health/ready` → Chroma `heartbeat` + Ollama `list` ping'i (kısa
+>   `READINESS_TIMEOUT_MS=3000`, retry YOK, fail-fast). Hepsi OK→200, biri down→503 + bağımlılık
+>   bazlı `{name, ok, error?}`. `/health` liveness aynen kaldı (bağımlılığa dokunmaz).
+> - **Metrik:** `prom-client` (dedicated Registry). `GET /metrics` Prometheus formatı (auth-DIŞI,
+>   helmet+rate-limit arkasında). Default process metrikleri + `http_request_duration_seconds`
+>   histogram (method/route/status; `_count` = istek sayısı; route etiketi MATCH edilen pattern
+>   `:param`'larla → cardinality sınırlı) + `rag_retrieval_top_score` histogram (orchestrator her
+>   sorguda en iyi skoru observe eder → retrieval kalite drift'i görünür). Timing middleware
+>   correlation'dan hemen sonra mount (tüm request'i kapsar).
+> **Doğrulama:** 15 yeni test (correlation-id 5, readiness 3 [vi.mock ile up/down/both-down],
+> metrics 2, integration 5: `/metrics` içerik + auth-bypass, `/health/ready` 503, cid header
+> echo/üret). Toplam 159 yeşil. Mutasyonla doğrulandı (`every`→`some`, status→200 sabit → kırmızı).
+>
+> **ERTELENDİ (OpenTelemetry tracing):** OTel ağır bir bağımlılık ağacı getirir ve span'leri
+> alacak bir **trace backend/collector (Jaeger/Tempo) olmadan** anlamlı değer üretmez, birim
+> testi de zayıf olur. Correlation id, uçtan uca istek takibini (log'da) zaten sağlıyor.
+> **Koşul:** Bir trace backend'i devreye girince ekle — auto-instrumentation (`@opentelemetry/sdk-node`
+> + HTTP/Express instrumentation) + OTLP exporter; correlation id'yi trace/span id ile ilişkilendir.
 
 **Amaç:** Prometheus metrikleri, OpenTelemetry tracing, gerçek readiness probe ve request
 correlation id ekle.

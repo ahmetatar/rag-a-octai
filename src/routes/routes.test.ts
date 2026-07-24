@@ -69,6 +69,61 @@ describe('GET /health', () => {
   });
 });
 
+describe('GET /health/ready', () => {
+  it('returns 503 while a dependency is unreachable', async () => {
+    // Nothing is running on the configured Chroma/Ollama hosts during tests, so the probe
+    // must report the service as not ready and list which dependency failed.
+    const response = await fetch(`${baseUrl}/health/ready`);
+
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as {
+      ready: boolean;
+      dependencies: { name: string; ok: boolean }[];
+    };
+    expect(body.ready).toBe(false);
+    expect(body.dependencies.map((dependency) => dependency.name).sort()).toEqual(['chroma', 'ollama']);
+    expect(body.dependencies.some((dependency) => !dependency.ok)).toBe(true);
+  });
+});
+
+describe('correlation id', () => {
+  it('returns a correlation id header even when the caller sends none', async () => {
+    const response = await fetch(`${baseUrl}/health`);
+
+    expect(response.headers.get('x-request-id')).toBeTruthy();
+  });
+
+  it('echoes an inbound correlation id back to the caller', async () => {
+    const response = await fetch(`${baseUrl}/health`, { headers: { 'x-correlation-id': 'trace-777' } });
+
+    expect(response.headers.get('x-request-id')).toBe('trace-777');
+  });
+});
+
+describe('GET /metrics', () => {
+  it('exposes Prometheus metrics including the HTTP request histogram', async () => {
+    // Make a request first so the histogram has at least one observation to render.
+    await fetch(`${baseUrl}/health`);
+
+    const response = await fetch(`${baseUrl}/metrics`);
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('content-type')).toContain('text/plain');
+    const body = await response.text();
+    expect(body).toContain('http_request_duration_seconds');
+    expect(body).toContain('process_cpu_user_seconds_total');
+  });
+
+  it('is reachable without an API key even when auth is enabled', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await fetch(`${baseUrl}/metrics`);
+
+    expect(response.status).toBe(200);
+  });
+});
+
 describe('authentication (when enabled)', () => {
   it('rejects /query without a key', async () => {
     config.authEnabled = true;

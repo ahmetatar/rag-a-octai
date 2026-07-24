@@ -75,6 +75,11 @@ export default {
   jobAttempts: process.env.JOB_ATTEMPTS ? parseInt(process.env.JOB_ATTEMPTS) : 3,
   /** Timeout for a single external call (Ollama/Chroma), in milliseconds */
   externalTimeoutMs: process.env.EXTERNAL_TIMEOUT_MS ? parseInt(process.env.EXTERNAL_TIMEOUT_MS) : 30_000,
+  /**
+   * Timeout for a single dependency ping in the /health/ready probe, in milliseconds. Kept
+   * short (and un-retried) so a readiness check fails fast rather than hanging a probe.
+   */
+  readinessTimeoutMs: process.env.READINESS_TIMEOUT_MS ? parseInt(process.env.READINESS_TIMEOUT_MS) : 3_000,
   /** Retry attempts for a failed external call (Ollama/Chroma) */
   externalRetryAttempts: process.env.EXTERNAL_RETRY_ATTEMPTS ? parseInt(process.env.EXTERNAL_RETRY_ATTEMPTS) : 3,
   /** Retrieval similarity threshold */

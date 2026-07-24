@@ -4,6 +4,7 @@ import { BaseEmbedding, createEmbedding } from './embedding';
 import { LangModelBase, OllamaLangModelRunner, PromptContext } from './llm';
 import { createReranker, Reranker } from './reranking';
 import { logger } from '@infrastructure/logging';
+import { observeRetrievalTopScore } from '@infrastructure/observability';
 
 /** How many characters of a retrieved chunk are echoed back as a citation excerpt. */
 const EXCERPT_LENGTH = 240;
@@ -99,6 +100,11 @@ export class RagOrchestrator {
         `${filteredResults.length}/${results.length} kept at or above score ${minScore}` +
         `${results.length ? ` (best: ${results[0].score.toFixed(3)})` : ''}.`
     );
+
+    // Record the best retrieved score so retrieval-quality drift is visible in metrics.
+    if (results.length) {
+      observeRetrievalTopScore(results[0].score);
+    }
 
     //4. Generate response using the language model. With no sources the model is asked to
     //   say it cannot answer, which is more useful to a caller than an empty string.
