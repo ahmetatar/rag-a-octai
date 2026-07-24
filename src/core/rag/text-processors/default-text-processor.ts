@@ -1,13 +1,39 @@
 import { TextProcessor } from './text-processor';
 
 /**
- * DefaultTextProcessor provides a basic implementation of text|markdown processing.
+ * Options controlling the DefaultTextProcessor's cleanup behaviour.
+ */
+export interface DefaultTextProcessorOptions {
+  /**
+   * Lines beginning with any of these strings are treated as running headers/footers and
+   * removed. Defaults to none: header text is document-specific, and guessing at it
+   * deletes real content. A caller that knows a document's boilerplate can pass it here.
+   */
+  headerPrefixes?: string[];
+}
+
+/**
+ * DefaultTextProcessor cleans up text extracted from documents (mainly PDFs) before it is
+ * chunked and embedded.
+ *
+ * Every transform here is deliberately conservative: this runs on real document content,
+ * so a rule that is even slightly too broad silently deletes text a user later expects to
+ * query. In particular it never deletes a line just because it is all digits (that would
+ * erase prices, quantities and list items) and never guesses at header/footer text.
+ *
  * @extends TextProcessor
  * @example
  * const textProcessor = new DefaultTextProcessor();
  * const processedText = textProcessor.processText(rawText);
  */
 export class DefaultTextProcessor extends TextProcessor {
+  private readonly headerPrefixes: string[];
+
+  constructor(options: DefaultTextProcessorOptions = {}) {
+    super();
+    this.headerPrefixes = options.headerPrefixes ?? [];
+  }
+
   /**
    * Processes the input text based on the provided options.
    * @param text Input text to be processed
@@ -21,39 +47,55 @@ export class DefaultTextProcessor extends TextProcessor {
     text = this.removePageNumbers(text);
     text = this.cleanTocLeaders(text);
     text = this.cleanNumberedToc(text);
-    text = this.removeLeaderDotLinesSafe(text);
-    text = this.removeHeadersFooters(text);
+    text = this.removeLeaderDotLines(text);
+    text = this.removeHeaderLines(text);
     text = this.fixLineBreaks(text);
     text = this.normalizeParagraphs(text);
-    text = this.removeDuplicateLines(text);
-    text = this.removeDuplicateParagraphs(text);
+    text = this.removeConsecutiveDuplicateLines(text);
     text = this.preserveSectionSpacing(text);
 
     return text.trim();
   }
 
+  /**
+   * Removes lines that are unambiguously page-number markers.
+   *
+   * A bare number on its own line is intentionally NOT removed: it is just as likely to be
+   * a price, a quantity or a list item as a page number. Only forms that explicitly read
+   * as pagination ("Page 5", "5 of 79", "- 5 -") are stripped.
+   *
+   * @param text Input text
+   * @returns Text without page-number markers
+   */
   private removePageNumbers(text: string): string {
     return (
       text
         // Page 12 / Page 12 of 34
         .replace(/^\s*Page\s+\d+(\s+of\s+\d+)?\s*$/gim, '')
-        // 12 / 12 of 34
-        .replace(/^\s*\d+(\s+of\s+\d+)?\s*$/gm, '')
+        // 12 of 34 (the "of" makes this unambiguous, unlike a bare number)
+        .replace(/^\s*\d+\s+of\s+\d+\s*$/gim, '')
         // -- 65 of 79 --
         .replace(/^\s*[-–—]{1,}\s*\d+\s+of\s+\d+\s*[-–—]{1,}\s*$/gm, '')
-        // - 12 - / -- 12 --
+        // - 12 - / -- 12 -- (dashes on both sides mark it as a page number, not data)
         .replace(/^\s*[-–—]{1,}\s*\d+\s*[-–—]{1,}\s*$/gm, '')
     );
   }
 
   /**
-   * Removes common headers and footers from the text.
+   * Removes lines that start with one of the configured header/footer prefixes.
+   * Does nothing unless the caller supplied prefixes, so real content is never guessed at.
    * @param text Input text
-   * @returns Text without headers and footers
+   * @returns Text without configured header/footer lines
    */
-  private removeHeadersFooters(text: string): string {
-    const HEADER_REGEX = /^(Company Name|Document Title|Confidential).*$/gim;
-    return text.replace(HEADER_REGEX, '');
+  private removeHeaderLines(text: string): string {
+    if (this.headerPrefixes.length === 0) {
+      return text;
+    }
+
+    return text
+      .split('\n')
+      .filter((line) => !this.headerPrefixes.some((prefix) => line.trimStart().startsWith(prefix)))
+      .join('\n');
   }
 
   /**
@@ -75,21 +117,27 @@ export class DefaultTextProcessor extends TextProcessor {
   }
 
   /**
-   * Removes duplicate paragraphs from the text.
+   * Collapses runs of identical consecutive lines into a single line.
+   *
+   * Implemented as a linear line scan rather than a back-reference regex
+   * (`/(.*)(\n\1)+/`), which can backtrack pathologically on adversarial input.
+   *
    * @param text Input text
-   * @returns Text without duplicate paragraphs
+   * @returns Text without consecutive duplicate lines
    */
-  private removeDuplicateParagraphs(text: string): string {
-    return text.replace(/(.*)(\n\1)+/g, '$1');
-  }
+  private removeConsecutiveDuplicateLines(text: string): string {
+    const lines = text.split('\n');
+    const deduped: string[] = [];
 
-  /**
-   * Removes duplicate lines from the text.
-   * @param text Input text
-   * @returns Text without duplicate lines
-   */
-  private removeDuplicateLines(text: string): string {
-    return text.replace(/^(.+)(\n\1)+$/gm, '$1');
+    for (const line of lines) {
+      // Only collapse repeated NON-empty lines; blank lines carry paragraph structure.
+      if (line !== '' && line === deduped[deduped.length - 1]) {
+        continue;
+      }
+      deduped.push(line);
+    }
+
+    return deduped.join('\n');
   }
 
   /**
@@ -120,11 +168,16 @@ export class DefaultTextProcessor extends TextProcessor {
   }
 
   /**
-   * Removes lines with leader dots safely from the text.
+   * Removes table-of-contents-style leader-dot lines (e.g. "Chapter One .... 12").
+   *
+   * The previous pattern nested `.{0,}` inside a repeated group (`(\.{3,}.{0,}){2,}`),
+   * a classic backtracking hazard. This version matches a single run of 3+ dots followed
+   * by a trailing page number — what a TOC leader actually looks like — in linear time.
+   *
    * @param text Input text
-   * @returns Text without leader dot lines
+   * @returns Text without leader-dot lines
    */
-  private removeLeaderDotLinesSafe(text: string): string {
-    return text.replace(/^.{20,}(\.{3,}.{0,}){2,}$/gm, '');
+  private removeLeaderDotLines(text: string): string {
+    return text.replace(/^.{20,}?\s\.{3,}\s*\d+\s*$/gm, '');
   }
 }

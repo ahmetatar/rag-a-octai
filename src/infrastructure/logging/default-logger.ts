@@ -1,11 +1,12 @@
 import { createLogger, format, transports } from 'winston';
+import config from '@app/config';
 
 /**
  * Default logger configuration using Winston.
- * Logs messages in JSON format with timestamps to the console.
+ * Logs messages with timestamps to the console; DEBUG=true lowers the level to `debug`.
  */
 const logger = createLogger({
-  level: 'info',
+  level: config.debugMode ? 'debug' : 'info',
   format: format.combine(
     format.timestamp(),
     format.printf(({ timestamp, level, message }) => `${timestamp} ${level}: ${message}`)
@@ -13,4 +14,4 @@ const logger = createLogger({
   transports: [new transports.Console()],
 });
 
-export default logger;
+export { logger };

@@ -1,3 +1,5 @@
+import { logger } from '@infrastructure/logging';
+
 /**
  * Interface representing file information.
  */
@@ -48,7 +50,7 @@ export class NoopFileHandler extends FileHandler {
    * @returns A promise that resolves to an empty string.
    */
   async handleFile(fileInfo: FileInfo): Promise<Document> {
-    console.log(`NoopFileHandler invoked for file: ${fileInfo.originalname}`);
+    logger.warn(`NoopFileHandler invoked for file: ${fileInfo.originalname}`);
     return { content: '' };
   }
 }

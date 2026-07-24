@@ -1,21 +1,23 @@
-import express from 'express';
-import logger from '@infrastructure/logging/default-logger';
 import config from '@app/config';
-import * as routes from '@routes/index';
-import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler } from '@core/rag';
+import { createApp } from '@app/app';
+import { logger } from '@infrastructure/logging';
+import { registerGracefulShutdown } from '@infrastructure/http';
 
-registerFileHandlers({
-  'text/plain': createTextFileHandler(),
-  'application/pdf': createPdfPageFileHandler(),
+const app = createApp();
+
+const server = app.listen(config.port, () => {
+  logger.info(`Server is running on port ${config.port}`);
 });
 
-const app = express();
+registerGracefulShutdown(server);
 
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
-app.use('/ingest', routes.ingestionRouter);
-app.use('/query', routes.queryRouter);
+// An unhandled rejection terminates the process by default on Node 22. Log the cause
+// first, otherwise the container restarts with no trace of what happened.
+process.on('unhandledRejection', (reason) => {
+  logger.error(`Unhandled promise rejection: ${reason instanceof Error ? reason.stack ?? reason.message : reason}`);
+});
 
-app.listen(config.port, () => {
-  logger.info(`Server is running on port ${config.port}`);
+process.on('uncaughtException', (error) => {
+  logger.error(`Uncaught exception: ${error.stack ?? error.message}`);
+  process.exit(1);
 });

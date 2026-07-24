@@ -5,23 +5,9 @@ import { LangModelBase, PromptContext } from './model-base';
  * Implementation of LangModel for Ollama LLM manager.
  * Uses Ollama's chat API to generate responses based on provided prompts and context.
  * @extends LangModelBase
- * @category Infrastructure/LangModels
  * @see {@link https://ollama.com/docs Ollama Documentation}
- * @example
- * ```typescript
- * import { OllamaLangModel } from '@infrastructure/lang-models/ollama-model';
- *
- * const ollamaModel = new OllamaLangModel('llama2', 'http://localhost:11434');
- * const promptCtx = {
- *   question: 'What is the capital of France?',
- *   contextSources: ['France is a country in Europe. The capital of France is Paris.'],
- * };
- *
- * const response = await ollamaModel.generateResponse(promptCtx);
- * console.log(response); // Outputs: Paris
- * ```
  */
-export class OllamaLangModel extends LangModelBase {
+export class OllamaLangModelRunner extends LangModelBase {
   private readonly ollama: Ollama;
 
   constructor(private model: string, private host: string) {
@@ -41,10 +27,10 @@ export class OllamaLangModel extends LangModelBase {
    * @param promptCtx The prompt containing context and question.
    * @returns The formatted prompt string.
    */
-  private buildPrompt(promptCtx: PromptContext) {
+  private buildPrompt(promptCtx: PromptContext): ChatRequest & { stream?: false } {
     const context = this.buildContext(promptCtx);
     const content = this.buildContent(context, promptCtx.question);
-    const promptTemplate = {
+    const promptTemplate: ChatRequest & { stream?: false } = {
       model: this.model,
       messages: [
         {
@@ -55,6 +41,12 @@ export class OllamaLangModel extends LangModelBase {
         { role: 'user', content },
       ],
     };
+
+    // Ollama caps generation through `num_predict`; without it the configured token
+    // limit is silently ignored and the model generates until it decides to stop.
+    if (promptCtx.maxTokens !== undefined) {
+      promptTemplate.options = { num_predict: promptCtx.maxTokens };
+    }
 
     return promptTemplate;
   }

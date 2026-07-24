@@ -1,0 +1,25 @@
+# Secrets - never bake credentials into an image
+.env
+.env.*
+
+# Host-built artifacts. node_modules in particular holds native binaries compiled for
+# the host OS (node-llama-cpp); copying them over the image's own install breaks it.
+node_modules
+dist
+coverage
+*.log
+
+# GGUF models are gigabytes. Mount them at runtime instead
+# (e.g. -v ./models:/app/models) when EMBEDDING_PROVIDER=llama.
+models
+
+# Developer tooling and local state
+.git
+.gitignore
+.vscode
+.editorconfig
+.DS_Store
+docs
+uploads
+Dockerfile
+docker-compose*.yml

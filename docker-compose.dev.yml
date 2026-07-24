@@ -50,14 +50,17 @@ services:
       - PORT=1453
       - CHROMADB_HOST=chromadb
       - CHROMADB_PORT=8000
+      - EMBEDDING_PROVIDER=ollama
       - EMBEDDING_MODEL=nomic-embed-text
-      - GENERATION_MODEL=gpt-4o-mini
+      # Generation runs through Ollama, so this must be an Ollama model, not an OpenAI one.
+      - GENERATION_MODEL=llama3.2
       - NODE_ENV=development
       - RAG_TOP_K=4
-      - RAG_MAX_TOKENS=200
-      - OLLAMA_HOST=http://host.containers.internal:11434
-      - GEMINI_API_KEY=your_gemini_api_key_here
-      - NODE_TLS_REJECT_UNAUTHORIZED=0
+      # The app reads MAX_TOKENS (RAG_MAX_TOKENS was ignored).
+      - MAX_TOKENS=200
+      # The ollama service below is on the same compose network.
+      - OLLAMA_HOST=http://ollama:11434
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     command: npm run dev -- --inspect=0.0.0.0:9229
     depends_on:
       chromadb:

@@ -1,6 +1,6 @@
 import { Ollama } from 'ollama';
 import { BaseEmbedding } from './base-embedding';
-import logger from '@infrastructure/logging/default-logger';
+import { logger } from '@infrastructure/logging';
 
 /**
  * Embedding class that uses Ollama's embedding service.

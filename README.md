@@ -16,18 +16,22 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 src/
 ├── config.ts              # Environment configuration
 ├── index.ts               # Express server entry point
+├── app.ts                 # Express app assembly (routes + middleware)
 ├── core/rag/
 │   ├── ingestion.ts       # Document ingestion pipeline
 │   ├── rag-orchestrator.ts # Query processing orchestrator
 │   ├── chunkers/          # Text chunking strategies
-│   ├── embedding/         # Embedding providers (Ollama, Gemini)
+│   ├── embedding/         # Embedding providers (Ollama, Llama, Gemini)
 │   ├── file-handlers/     # File type processors (PDF, text)
-│   ├── lang-models/       # Language model integrations
+│   ├── llm/               # Language model runners (Ollama, Llama)
 │   ├── text-processors/   # Text preprocessing utilities
 │   └── vector-store/      # ChromaDB vector store integration
 ├── infrastructure/
+│   ├── async/             # Lazy singleton helper
+│   ├── http/              # Error handling + graceful shutdown
 │   └── logging/           # Winston logging setup
 └── routes/
+    ├── health.route.ts    # Liveness probe
     ├── ingestion.route.ts # Document upload endpoint
     └── query.route.ts     # Query endpoint
 ```
@@ -68,7 +72,14 @@ src/
    RETRIEVAL_THRESHOLD=0.35
    MAX_TOKENS=1000
 
+   # Upload limits
+   MAX_UPLOAD_FILE_SIZE_MB=25
+   MAX_UPLOAD_FILES=10
+
    # Models
+   # EMBEDDING_PROVIDER applies to BOTH ingestion and querying - documents and
+   # queries must be embedded by the same model or retrieval returns nonsense.
+   EMBEDDING_PROVIDER=ollama
    EMBEDDING_MODEL=nomic-embed-text
    GENERATION_MODEL=llama3.2
 
@@ -146,21 +157,58 @@ curl -X POST \
 }
 ```
 
+**Errors:** `400` no file / malformed request · `413` file too large or too many files ·
+`415` unsupported file type · `500` ingestion failed (cause is logged, not returned).
+
 #### Query Documents
 
-Ask questions about the ingested documents.
+Ask questions about the ingested documents. `topK` and `threshold` are optional and
+override the configured defaults for that request.
 
 ```bash
 curl -X POST \
   -H "Content-Type: application/json" \
-  -d '{"query": "What is the main topic of the documents?"}' \
+  -d '{"query": "What is the main topic of the documents?", "topK": 5, "threshold": 0.45}' \
   http://localhost:3000/query
 ```
 
 **Response:**
 ```json
 {
-  "response": "Based on the documents, the main topic is..."
+  "response": "Based on the documents, the main topic is...",
+  "sources": [
+    {
+      "id": "chunk-8f3c...",
+      "source": "handbook.pdf",
+      "page": 12,
+      "score": 0.82,
+      "excerpt": "The first 240 characters of the retrieved chunk..."
+    }
+  ]
+}
+```
+
+`sources` lists the chunks handed to the model, ordered from the closest match, so an
+answer can be traced back to the documents. When nothing clears the similarity threshold
+the list is empty and the model is asked to say it cannot answer.
+
+**Errors:** `400` invalid body (missing/empty `query`, `topK` out of range, `threshold`
+outside `[-1, 1]`, query longer than `MAX_QUERY_LENGTH`) · `500` internal error.
+
+#### Health
+
+Liveness probe. Answers as long as the process can serve requests; it does not call
+ChromaDB or Ollama.
+
+```bash
+curl http://localhost:3000/health
+```
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "uptime": 12.34
 }
 ```
 
@@ -172,16 +220,27 @@ curl -X POST \
 | `DEBUG` | Enable debug mode | `false` |
 | `CHUNK_SIZE` | Text chunk size | `1000` |
 | `CHUNK_OVERLAP` | Overlap between chunks | `0` |
+| `EMBEDDING_BATCH_SIZE` | Chunks embedded per batch during ingestion | `64` |
 | `RAG_TOP_K` | Number of documents to retrieve | `3` |
-| `RETRIEVAL_THRESHOLD` | Minimum similarity score | `0.35` |
+| `RAG_MAX_TOP_K` | Upper bound a request may ask for via `topK` | `50` |
+| `MAX_QUERY_LENGTH` | Maximum query length in characters | `2000` |
+| `RETRIEVAL_THRESHOLD` | Minimum similarity score, higher is stricter (range `[-1, 1]`) | `0.35` |
 | `MAX_TOKENS` | Maximum response tokens | `1000` |
-| `EMBEDDING_MODEL` | Ollama embedding model | - |
+| `MAX_UPLOAD_FILE_SIZE_MB` | Maximum size of a single uploaded file | `25` |
+| `MAX_UPLOAD_FILES` | Maximum files per ingestion request | `10` |
+| `EMBEDDING_PROVIDER` | Embedding provider for ingestion **and** query (`ollama` \| `llama` \| `gemini`) | `ollama` |
+| `EMBEDDING_MODEL` | Embedding model name (`ollama`, `gemini`) | - |
+| `EMBEDDING_MODEL_PATH` | Local GGUF model path (`llama` provider) | - |
 | `GENERATION_MODEL` | Ollama generation model | - |
 | `OLLAMA_HOST` | Ollama server URL | `http://localhost:11434` |
 | `GEMINI_API_KEY` | Google Gemini API key | - |
 | `CHROMADB_HOST` | ChromaDB host | `localhost` |
 | `CHROMADB_PORT` | ChromaDB port | `8000` |
 | `CHROMA_COLLECTION` | ChromaDB collection name | `docs` |
+| `CORS_ORIGINS` | Comma-separated allowed origins (`*` for any, empty disables CORS) | - |
+| `RATE_LIMIT_WINDOW_MS` | Rate-limit window in milliseconds | `60000` |
+| `RATE_LIMIT_MAX` | Max requests per IP per window | `100` |
+| `TRUST_PROXY` | Proxy hops to trust for client IP (behind nginx/LB) | `0` |
 
 ## Testing
 

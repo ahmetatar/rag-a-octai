@@ -19,6 +19,33 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: raga-octi-api
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CHROMADB_HOST=chromadb
+      - CHROMADB_PORT=8000
+      # This API talks to Ollama for embeddings/generation. Point it at an Ollama reachable
+      # from the container (a host install, or an ollama service). host.docker.internal
+      # resolves to the host on Docker Desktop; use host.containers.internal on Podman.
+      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
+      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
+      - GENERATION_MODEL=${GENERATION_MODEL:-llama3.2}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    depends_on:
+      chromadb:
+        condition: service_healthy
+    networks:
+      - app-network
+    restart: unless-stopped
+
 networks:
   app-network:
     driver: bridge

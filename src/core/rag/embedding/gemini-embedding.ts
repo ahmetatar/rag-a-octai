@@ -9,17 +9,22 @@ import { BaseEmbedding } from './base-embedding';
  * ```typescript
  * import { GeminiEmbedding } from 'your-module-path';
  * 
- * const embedding = new GeminiEmbedding();
+ * const embedding = new GeminiEmbedding('gemini-embedding-001', apiKey);
  * const vectors = await embedding.embed(['Your text here']);
  * ```
  */
 export class GeminiEmbedding extends BaseEmbedding {
-  private readonly ai = new GoogleGenAI({});
+  private readonly ai: GoogleGenAI;
+
+  constructor(private readonly model: string, apiKey: string) {
+    super();
+    this.ai = new GoogleGenAI({ apiKey });
+  }
 
   /** @inheritdoc */
   async embed(texts: string[]): Promise<number[][]> {
     const response = await this.ai.models.embedContent({
-      model: process.env.EMBEDDING_MODEL || 'gemini-1.5-embed-text-001',
+      model: this.model,
       contents: texts,
       config: {
         taskType: 'RETRIEVAL_DOCUMENT',
