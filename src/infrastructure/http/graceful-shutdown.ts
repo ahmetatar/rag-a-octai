@@ -12,9 +12,15 @@ const SHUTDOWN_SIGNALS = ['SIGTERM', 'SIGINT'] as const;
  * lost. A timeout guards against requests that never finish.
  *
  * @param server The listening HTTP server.
+ * @param onShutdown Optional async cleanup (e.g. closing queue/Redis connections) run after
+ * the server stops accepting connections and before the process exits.
  * @param timeoutMs How long to wait for in-flight requests before forcing an exit.
  */
-export function registerGracefulShutdown(server: Server, timeoutMs = 10_000): void {
+export function registerGracefulShutdown(
+  server: Server,
+  onShutdown?: () => Promise<void>,
+  timeoutMs = 10_000
+): void {
   let shuttingDown = false;
 
   const shutdown = (signal: string) => {
@@ -33,14 +39,20 @@ export function registerGracefulShutdown(server: Server, timeoutMs = 10_000): vo
     // Do not keep the event loop alive just for this timer.
     forceExit.unref();
 
-    server.close((error) => {
-      clearTimeout(forceExit);
-
+    server.close(async (error) => {
       if (error) {
+        clearTimeout(forceExit);
         logger.error(`Error while closing server: ${error.message}`);
         process.exit(1);
       }
 
+      try {
+        await onShutdown?.();
+      } catch (cleanupError) {
+        logger.error(`Error during shutdown cleanup: ${cleanupError instanceof Error ? cleanupError.message : cleanupError}`);
+      }
+
+      clearTimeout(forceExit);
       logger.info('Server closed.');
       process.exit(0);
     });

@@ -1,5 +1,6 @@
 import { GoogleGenAI } from '@google/genai';
 import { BaseEmbedding } from './base-embedding';
+import { resilientCall } from '../resilient-call';
 
 /**
  * Gemini embedding implementation.
@@ -23,13 +24,15 @@ export class GeminiEmbedding extends BaseEmbedding {
 
   /** @inheritdoc */
   async embed(texts: string[]): Promise<number[][]> {
-    const response = await this.ai.models.embedContent({
-      model: this.model,
-      contents: texts,
-      config: {
-        taskType: 'RETRIEVAL_DOCUMENT',
-      },
-    });
+    const response = await resilientCall('gemini.embedContent', () =>
+      this.ai.models.embedContent({
+        model: this.model,
+        contents: texts,
+        config: {
+          taskType: 'RETRIEVAL_DOCUMENT',
+        },
+      })
+    );
 
     if (!response.embeddings) {
       throw new Error('Failed to generate embeddings');

@@ -9,6 +9,16 @@ import { logger } from '@infrastructure/logging';
  * Factory function to create a RagDataIngestor instance.
  * @returns {RagDataIngestor} A new instance of RagDataIngestor.
  */
+/**
+ * Summary of an ingestion run.
+ */
+export interface IngestSummary {
+  /** Number of chunks stored. */
+  chunks: number;
+  /** Number of distinct sources ingested. */
+  sources: number;
+}
+
 export async function createRagDataIngestor(): Promise<RagDataIngestor> {
   const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
   const embedding = await createEmbedding();
@@ -50,9 +60,9 @@ export class RagDataIngestor {
    * @param params Parameters passed to factory-registered file handlers.
    * @param tenantId Tenant the documents belong to; tagged on every chunk and used to scope
    * the delete-then-upsert so tenants stay isolated.
-   * @returns A promise that resolves when ingestion is complete.
+   * @returns A summary of how much was stored.
    */
-  async ingest(files: FileInfo[], params?: HandlerResolveParameters, tenantId?: string) {
+  async ingest(files: FileInfo[], params?: HandlerResolveParameters, tenantId?: string): Promise<IngestSummary> {
     if (!files || files.length === 0) {
       throw new Error('No files provided for ingestion');
     }
@@ -61,7 +71,7 @@ export class RagDataIngestor {
 
     if (allChunks.length === 0) {
       logger.warn('Ingestion produced no chunks; nothing to store.');
-      return;
+      return { chunks: 0, sources: 0 };
     }
 
     // Replace each source's existing chunks. Done for every source before any upsert so
@@ -91,6 +101,8 @@ export class RagDataIngestor {
 
     await this.store.upsert(upsertItems);
     logger.info(`Ingested ${upsertItems.length} chunk(s) from ${sources.size} source(s).`);
+
+    return { chunks: upsertItems.length, sources: sources.size };
   }
 
   /**

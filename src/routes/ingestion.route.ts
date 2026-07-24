@@ -1,19 +1,52 @@
+import { randomUUID } from 'crypto';
+import { existsSync, mkdirSync } from 'fs';
+import path from 'path';
 import express, { NextFunction, Request, Response } from 'express';
 import multer, { MulterError } from 'multer';
 import config from '@app/config';
 import {
-  createRagDataIngestor,
+  createIngestQueue,
   getRegisteredMimeTypes,
-  HandlerResolveParameters,
+  IngestJobFile,
+  IngestQueue,
   isMimeTypeSupported,
 } from '@core/rag';
 import { logger } from '@infrastructure/logging';
-import { lazySingleton } from '@infrastructure/async';
 import { tenantOf } from '@infrastructure/http';
 
 const router = express.Router();
 
 const MAX_FILE_SIZE_BYTES = config.maxUploadFileSizeMb * 1024 * 1024;
+
+// Uploaded files are staged here for the async worker; created once at startup.
+if (!existsSync(config.uploadDir)) {
+  mkdirSync(config.uploadDir, { recursive: true });
+}
+
+// One shared queue instance backs both the enqueue and status handlers, and is closed on
+// shutdown (see closeIngestQueue).
+let queue: IngestQueue | undefined;
+
+/**
+ * Returns the shared ingest queue, creating it on first use.
+ * @returns The ingest queue.
+ */
+function getQueue(): IngestQueue {
+  if (!queue) {
+    queue = createIngestQueue();
+  }
+  return queue;
+}
+
+/**
+ * Closes the ingest queue if it was created. Called on graceful shutdown.
+ */
+export async function closeIngestQueue(): Promise<void> {
+  if (queue) {
+    await queue.close();
+    queue = undefined;
+  }
+}
 
 /**
  * Raised when an uploaded file has a MIME type that no handler is registered for.
@@ -25,9 +58,16 @@ class UnsupportedFileTypeError extends Error {
   }
 }
 
-// Uploads are buffered in memory and every chunk is embedded, so an unbounded upload is
-// an easy way to exhaust memory. Reject oversized or unsupported files before that.
+// Files are streamed to disk (not held in memory) so the request returns quickly and large
+// uploads never sit in the heap; the worker reads them back when it processes the job.
 const upload = multer({
+  storage: multer.diskStorage({
+    destination: config.uploadDir,
+    filename: (_req, file, callback) => {
+      // Random on-disk name avoids collisions; the real name travels in the job payload.
+      callback(null, `${randomUUID()}${path.extname(file.originalname)}`);
+    },
+  }),
   limits: {
     fileSize: MAX_FILE_SIZE_BYTES,
     files: config.maxUploadFiles,
@@ -44,10 +84,6 @@ const upload = multer({
 });
 
 const uploadDocs = upload.array('docs');
-
-// Built on the first request and reused afterwards. Building it is async (the embedding
-// model may need loading), so it must not happen at module load.
-const getRagDataIngestor = lazySingleton(createRagDataIngestor);
 
 /**
  * Maps an upload failure onto an HTTP status and a message safe to return to the client.
@@ -93,26 +129,18 @@ function handleUpload(req: Request, res: Response, next: NextFunction): void {
 }
 
 /**
- * Endpoint to ingest documents
- * Expects multipart/form-data with files under the 'docs' field
- * Returns JSON status response
- * Example request using curl:
- * curl -X POST -F "docs=@/path/to/doc1.txt" -F "docs=@/path/to/doc2.pdf" http://localhost:3000/ingest
- * Response:
- * {
- *   "status": "success"
- * }
- * or
- * {
- *   "status": "error",
- *   "message": "Ingestion failed"
- * }
+ * POST /ingest
+ * Accepts multipart/form-data with files under the 'docs' field, stages them, and enqueues
+ * an ingestion job. Returns 202 with a job id immediately — ingestion runs in the
+ * background so a large upload never blocks the request.
  *
- * Error Handling:
- * - 400 when no file is provided or the request is malformed.
- * - 413 when a file exceeds MAX_UPLOAD_FILE_SIZE_MB or there are more than MAX_UPLOAD_FILES files.
- * - 415 when a file's MIME type has no registered handler.
- * - 500 when ingestion itself fails; the cause is logged, never returned.
+ * Response: { status: 'accepted', jobId }
+ *
+ * Errors:
+ * - 400 no file / malformed request
+ * - 413 file too large or too many files
+ * - 415 unsupported file type
+ * - 401 when auth is enabled and no valid key is given
  */
 router.post('/', handleUpload, async (req, res) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
@@ -121,17 +149,47 @@ router.post('/', handleUpload, async (req, res) => {
     return res.status(400).json({ status: 'error', message: 'No files provided under the "docs" field.' });
   }
 
-  try {
-    const ragDataIngestor = await getRagDataIngestor();
-    await ragDataIngestor.ingest(files, req.query as HandlerResolveParameters, tenantOf(res.locals));
-  } catch (error) {
-    // Log the cause server-side; the client only learns that ingestion failed, since the
-    // error may carry internal paths, hostnames or stack traces.
-    logger.error(`Error during ingestion: ${error instanceof Error ? error.stack ?? error.message : error}`);
-    return res.status(500).json({ status: 'error', message: 'Ingestion failed' });
-  }
+  const jobFiles: IngestJobFile[] = files.map((file) => ({
+    path: file.path,
+    originalname: file.originalname,
+    mimetype: file.mimetype,
+    size: file.size,
+  }));
 
-  res.json({ status: 'success' });
+  try {
+    const jobId = await getQueue().enqueue({
+      files: jobFiles,
+      params: req.query as Record<string, unknown>,
+      tenantId: tenantOf(res.locals),
+    });
+
+    res.status(202).json({ status: 'accepted', jobId });
+  } catch (error) {
+    logger.error(`Failed to enqueue ingestion: ${error instanceof Error ? error.stack ?? error.message : error}`);
+    res.status(500).json({ status: 'error', message: 'Could not enqueue ingestion' });
+  }
+});
+
+/**
+ * GET /ingest/status/:jobId
+ * Returns the current state of a previously submitted ingestion job.
+ *
+ * Response: { id, state: 'queued'|'active'|'completed'|'failed', result?, error? }
+ * - 404 when the job id is unknown (or its history has expired).
+ */
+router.get('/status/:jobId', async (req, res) => {
+  try {
+    const status = await getQueue().getStatus(req.params.jobId);
+
+    if (!status) {
+      return res.status(404).json({ status: 'error', message: 'Unknown job id' });
+    }
+
+    res.json(status);
+  } catch (error) {
+    logger.error(`Failed to read job status: ${error instanceof Error ? error.stack ?? error.message : error}`);
+    res.status(500).json({ status: 'error', message: 'Could not read job status' });
+  }
 });
 
 export default router;

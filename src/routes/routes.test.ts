@@ -1,9 +1,11 @@
 import { AddressInfo } from 'net';
 import { Server } from 'http';
+import { rmSync } from 'fs';
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import config from '@app/config';
 import { createApp } from '@app/app';
+import { closeIngestQueue } from './ingestion.route';
 
 const authConfig = { authEnabled: config.authEnabled, apiKeys: config.apiKeys };
 
@@ -27,8 +29,11 @@ beforeAll(async () => {
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
 
-afterAll(() => {
+afterAll(async () => {
   server.close();
+  // Let in-flight memory-queue jobs settle, then remove staged uploads.
+  await closeIngestQueue();
+  rmSync(config.uploadDir, { recursive: true, force: true });
 });
 
 /**
@@ -192,5 +197,34 @@ describe('POST /ingest validation', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({ message: expect.stringContaining('docs') });
+  });
+});
+
+describe('POST /ingest — async job', () => {
+  it('accepts a valid upload and returns a job id without blocking', async () => {
+    const response = await postFiles([['docs', 'note.txt', 'hello world', 'text/plain']]);
+
+    expect(response.status).toBe(202);
+    const payload = (await response.json()) as { status: string; jobId: string };
+    expect(payload.status).toBe('accepted');
+    expect(payload.jobId).toBeTruthy();
+  });
+
+  it('reports the status of a submitted job', async () => {
+    const submit = await postFiles([['docs', 'note.txt', 'hello world', 'text/plain']]);
+    const { jobId } = (await submit.json()) as { jobId: string };
+
+    const status = await fetch(`${baseUrl}/ingest/status/${jobId}`);
+
+    expect(status.status).toBe(200);
+    const body = (await status.json()) as { id: string; state: string };
+    expect(body.id).toBe(jobId);
+    expect(['queued', 'active', 'completed', 'failed']).toContain(body.state);
+  });
+
+  it('returns 404 for an unknown job id', async () => {
+    const status = await fetch(`${baseUrl}/ingest/status/does-not-exist`);
+
+    expect(status.status).toBe(404);
   });
 });

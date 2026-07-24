@@ -1,6 +1,7 @@
 import { Document } from '../file-handlers';
 import { ChromaClient, Collection, Where } from 'chromadb';
 import { logger } from '@infrastructure/logging';
+import { resilientCall } from '../resilient-call';
 
 /**
  * Vector spaces supported by ChromaDB.
@@ -95,12 +96,14 @@ export class ChromaVectorStore {
     for (let start = 0; start < items.length; start += batchSize) {
       const batch = items.slice(start, start + batchSize);
 
-      await collection.upsert({
-        ids: batch.map((item) => item.id),
-        embeddings: batch.map((item) => item.embedding || []),
-        documents: batch.map((item) => item.text),
-        metadatas: batch.map((item) => item.metadata || {}),
-      });
+      await resilientCall('chroma.upsert', () =>
+        collection.upsert({
+          ids: batch.map((item) => item.id),
+          embeddings: batch.map((item) => item.embedding || []),
+          documents: batch.map((item) => item.text),
+          metadatas: batch.map((item) => item.metadata || {}),
+        })
+      );
     }
   }
 
@@ -119,7 +122,7 @@ export class ChromaVectorStore {
   async deleteBySource(source: string, tenantId?: string): Promise<void> {
     const collection = await this.getCollection();
     const where: Where = tenantId ? { $and: [{ source }, { tenantId }] } : { source };
-    await collection.delete({ where });
+    await resilientCall('chroma.delete', () => collection.delete({ where }));
   }
 
   /**
@@ -133,11 +136,13 @@ export class ChromaVectorStore {
   async search(queryVector: number[], topK: number, where?: Where): Promise<SearchResult[]> {
     const collection = await this.getCollection();
 
-    const results = await collection.query({
-      queryEmbeddings: [queryVector],
-      nResults: topK,
-      ...(where ? { where } : {}),
-    });
+    const results = await resilientCall('chroma.query', () =>
+      collection.query({
+        queryEmbeddings: [queryVector],
+        nResults: topK,
+        ...(where ? { where } : {}),
+      })
+    );
 
     const out: SearchResult[] = [];
 
@@ -173,10 +178,12 @@ export class ChromaVectorStore {
     }
 
     try {
-      const collection = await this.chromaClient.getOrCreateCollection({
-        name: this.collectionName,
-        configuration: { hnsw: { space: this.space } },
-      });
+      const collection = await resilientCall('chroma.getOrCreateCollection', () =>
+        this.chromaClient.getOrCreateCollection({
+          name: this.collectionName,
+          configuration: { hnsw: { space: this.space } },
+        })
+      );
 
       this.warnOnSpaceMismatch(collection);
       this.cache.set(this.collectionName, collection);

@@ -50,6 +50,23 @@ export default {
   maxUploadFileSizeMb: process.env.MAX_UPLOAD_FILE_SIZE_MB ? parseInt(process.env.MAX_UPLOAD_FILE_SIZE_MB) : 25,
   /** Maximum number of files accepted in one ingestion request */
   maxUploadFiles: process.env.MAX_UPLOAD_FILES ? parseInt(process.env.MAX_UPLOAD_FILES) : 10,
+  /** Directory where uploaded files are staged for the async ingest worker */
+  uploadDir: process.env.UPLOAD_DIR ? path.resolve(process.env.UPLOAD_DIR) : path.resolve('uploads'),
+  /**
+   * Ingest queue driver: 'bull' (BullMQ + Redis, persistent) or 'memory' (in-process, lost
+   * on restart). Defaults to 'bull'; tests and no-Redis setups use 'memory'.
+   */
+  queueDriver: (process.env.QUEUE_DRIVER || 'bull').toLowerCase(),
+  /** Redis connection URL for the BullMQ queue driver */
+  redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
+  /** How many ingest jobs the worker processes concurrently */
+  queueConcurrency: process.env.QUEUE_CONCURRENCY ? parseInt(process.env.QUEUE_CONCURRENCY) : 2,
+  /** Retry attempts for a failed ingest job (BullMQ) */
+  jobAttempts: process.env.JOB_ATTEMPTS ? parseInt(process.env.JOB_ATTEMPTS) : 3,
+  /** Timeout for a single external call (Ollama/Chroma), in milliseconds */
+  externalTimeoutMs: process.env.EXTERNAL_TIMEOUT_MS ? parseInt(process.env.EXTERNAL_TIMEOUT_MS) : 30_000,
+  /** Retry attempts for a failed external call (Ollama/Chroma) */
+  externalRetryAttempts: process.env.EXTERNAL_RETRY_ATTEMPTS ? parseInt(process.env.EXTERNAL_RETRY_ATTEMPTS) : 3,
   /** Retrieval similarity threshold */
   retrievalThreshold: process.env.RETRIEVAL_THRESHOLD ? parseFloat(process.env.RETRIEVAL_THRESHOLD) : 0.35,
   /**

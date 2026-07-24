@@ -150,15 +150,30 @@ curl -X POST \
   http://localhost:3000/ingest
 ```
 
-**Response:**
+Ingestion runs asynchronously: the request returns immediately with a job id, and the
+document is processed by a background worker (BullMQ + Redis).
+
+**Response (202 Accepted):**
 ```json
 {
-  "status": "success"
+  "status": "accepted",
+  "jobId": "42"
 }
 ```
 
+Poll the job with `GET /ingest/status/:jobId`:
+```json
+{
+  "id": "42",
+  "state": "completed",
+  "result": { "chunks": 12, "sources": 1 }
+}
+```
+`state` is one of `queued`, `active`, `completed`, `failed` (with an `error` on failure).
+
 **Errors:** `400` no file / malformed request · `413` file too large or too many files ·
-`415` unsupported file type · `500` ingestion failed (cause is logged, not returned).
+`415` unsupported file type · `401` when auth is enabled and no valid key is given ·
+`404` (status endpoint) unknown job id.
 
 #### Query Documents
 
@@ -221,6 +236,13 @@ curl http://localhost:3000/health
 | `CHUNK_SIZE` | Text chunk size | `1000` |
 | `CHUNK_OVERLAP` | Overlap between chunks | `0` |
 | `EMBEDDING_BATCH_SIZE` | Chunks embedded per batch during ingestion | `64` |
+| `QUEUE_DRIVER` | Ingest queue: `bull` (BullMQ+Redis, durable) or `memory` (in-process) | `bull` |
+| `REDIS_URL` | Redis connection URL for the `bull` driver | `redis://localhost:6379` |
+| `UPLOAD_DIR` | Directory where uploads are staged for the worker | `uploads` |
+| `QUEUE_CONCURRENCY` | Ingest jobs processed concurrently | `2` |
+| `JOB_ATTEMPTS` | Retry attempts for a failed ingest job | `3` |
+| `EXTERNAL_TIMEOUT_MS` | Timeout per external call (Ollama/Chroma) | `30000` |
+| `EXTERNAL_RETRY_ATTEMPTS` | Retry attempts per external call | `3` |
 | `RAG_TOP_K` | Number of documents to retrieve | `3` |
 | `RAG_MAX_TOP_K` | Upper bound a request may ask for via `topK` | `50` |
 | `MAX_QUERY_LENGTH` | Maximum query length in characters | `2000` |

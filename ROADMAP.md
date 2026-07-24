@@ -136,7 +136,24 @@ ile e2e). `chroma-vector-store` filtresi için birim testi.
 ---
 
 ### T2 — Asenkron ingest + dayanıklılık (retry/backoff/timeout)
-**Durum:** Todo · **Öncelik:** P0 (dayanıklılık) · **Bağımlılık:** yok
+**Durum:** ✅ Done (2026-07) · **Öncelik:** P0 (dayanıklılık) · **Bağımlılık:** yok
+
+> **Yapıldı:** `POST /ingest` → `202 {jobId}` (senkron bloke yok), `GET /ingest/status/:jobId`
+> (`queued|active|completed|failed` + `result`/`error`). Kuyruk arayüz ardında: **BullMQ +
+> Redis** (kalıcı, `QUEUE_DRIVER=bull`) ve **in-memory** (`memory`, test + Redis'siz fallback).
+> Dosyalar diske stage ediliyor (multer diskStorage → `UPLOAD_DIR`), buffer kuyruğa girmiyor;
+> worker okuyup ingest ediyor ve **her durumda** (hata dahil) staged dosyayı siliyor.
+> Dış çağrılara (Ollama embed/chat, Chroma upsert/query/delete/getOrCreate, Gemini)
+> `resilientCall` = `withTimeout` + `withRetry` (exponential backoff + jitter). Graceful
+> shutdown kuyruğu/Redis bağlantılarını kapatıyor. `ingest()` artık `{chunks, sources}` özeti
+> döndürüyor.
+> **Doğrulama:** 39 yeni test (resilience 11, memory queue 5, job handler 3, route async 3,
+> +güncellenenler); toplam 117 yeşil. Gerçek Redis+BullMQ+ChromaDB e2e: `202 {jobId:1}` →
+> active → completed `{chunks:1,sources:1}`, query veriyi buluyor, staged dosya sızmıyor,
+> ölü Ollama'ya query retry loglayıp asılı kalmadan 500 dönüyor.
+> **Sonraki tur için not:** çok-instance için staged upload'lar paylaşımlı depoya (S3) taşınmalı;
+> worker şu an in-process (ayrı worker süreci ölçek için sonraki adım). BullMQ Board/observability
+> T6'da eklenebilir.
 
 **Amaç:** Büyük/toplu doküman yüklemesini HTTP isteğini bloke etmeden işle; dış servis
 (Chroma/Ollama) çağrılarına timeout + retry + backoff ekle.
@@ -364,7 +381,7 @@ vektör DB değerlendir (pgvector / Qdrant / Weaviate). Karar dokümanı + gerek
 | Sıra | Task | Öncelik | Neden bu sırada |
 |------|------|---------|-----------------|
 | 1 | ✅ T1 Auth + tenant izolasyonu | P0 | Güvenlik açığı; her şeyden önce |
-| 2 | T2 Async ingest + dayanıklılık | P0 | İlk büyük dosyada patlar |
+| 2 | ✅ T2 Async ingest + dayanıklılık | P0 | İlk büyük dosyada patlar |
 | 3 | T3 Eval harness | P1 | Sonraki kalite işleri ölçülsün diye |
 | 4 | T4 Reranking + hybrid | P1 | Asıl kalite sıçraması (T3 ile ölçülerek) |
 | 5 | T5 Streaming + multi-turn | P2 | UX olgunluğu |

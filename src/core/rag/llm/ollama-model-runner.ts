@@ -1,5 +1,6 @@
 import { ChatRequest, Ollama } from 'ollama';
 import { LangModelBase, PromptContext } from './model-base';
+import { resilientCall } from '../resilient-call';
 
 /**
  * Implementation of LangModel for Ollama LLM manager.
@@ -18,7 +19,7 @@ export class OllamaLangModelRunner extends LangModelBase {
   /** @inheritdoc */
   async generateResponse(promptCtx: PromptContext): Promise<string> {
     const prompt = this.buildPrompt(promptCtx);
-    const response = await this.ollama.chat(prompt);
+    const response = await resilientCall('ollama.chat', () => this.ollama.chat(prompt));
     return response.message.content;
   }
 

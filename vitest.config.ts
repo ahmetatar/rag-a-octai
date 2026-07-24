@@ -12,6 +12,9 @@ export default defineConfig({
       MAX_UPLOAD_FILES: '2',
       // High enough that the route tests never trip the limiter and become flaky.
       RATE_LIMIT_MAX: '100000',
+      // In-process queue so tests never need Redis; staged uploads go to a local scratch dir.
+      QUEUE_DRIVER: 'memory',
+      UPLOAD_DIR: '.vitest-uploads',
     },
     exclude: ['**/node_modules/**', '**/dist/**', '**/.{idea,git,cache,output,temp}/**'],
     coverage: {

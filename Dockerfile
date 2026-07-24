@@ -31,6 +31,10 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY package.json ./
 
+# The upload staging dir must be writable by the non-root user; create it owned by node
+# so the app (and any mounted volume) can write there.
+RUN mkdir -p /app/uploads && chown node:node /app/uploads
+
 # GGUF models are deliberately not baked into the image (see .dockerignore). Mount them
 # when using EMBEDDING_PROVIDER=llama:  -v ./models:/app/models
 USER node

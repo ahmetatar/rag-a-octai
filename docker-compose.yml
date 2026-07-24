@@ -19,6 +19,21 @@ services:
       timeout: 5s
       retries: 5
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - app-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
       context: .
@@ -39,8 +54,17 @@ services:
       - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
       - GENERATION_MODEL=${GENERATION_MODEL:-llama3.2}
       - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # Async ingest queue (BullMQ + Redis). Uploaded files are staged on a volume the
+      # worker reads from; keep it on shared storage if you scale to multiple instances.
+      - QUEUE_DRIVER=${QUEUE_DRIVER:-bull}
+      - REDIS_URL=redis://redis:6379
+      - UPLOAD_DIR=/app/uploads
+    volumes:
+      - upload-data:/app/uploads
     depends_on:
       chromadb:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     networks:
       - app-network
@@ -52,3 +76,5 @@ networks:
 
 volumes:
   chromadb-data:
+  redis-data:
+  upload-data:
