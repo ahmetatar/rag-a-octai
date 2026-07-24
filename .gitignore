@@ -9,3 +9,4 @@ uploads
 app.log
 models
 .vitest-uploads
+eval/results

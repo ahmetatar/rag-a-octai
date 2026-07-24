@@ -1,0 +1,164 @@
+import { promises as fs } from 'fs';
+import path from 'path';
+import config from '@app/config';
+import { logger } from '@infrastructure/logging';
+import { RecursiveChunker } from '../chunkers';
+import { createEmbedding } from '../embedding';
+import { FileInfo, resolveFileHandler } from '../file-handlers';
+import { RagDataIngestor } from '../ingestion';
+import { OllamaLangModelRunner } from '../llm';
+import { ChromaVectorStore } from '../vector-store';
+import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
+import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
+
+/**
+ * Options for a single evaluation run.
+ */
+export interface RunEvalOptions {
+  /** Directory of corpus files to ingest. */
+  corpusDir: string;
+  /** Path to the JSONL dataset of eval cases. */
+  datasetPath: string;
+  /** Collection to ingest into and query; kept separate from production data. */
+  collection: string;
+  /** Retrieval cut-off. */
+  topK: number;
+  /** Tenant to tag/scope the eval corpus under. */
+  tenantId: string;
+  /** When true, generate answers and score keyword coverage (needs a working LLM). */
+  generateAnswers: boolean;
+}
+
+/** Maps a file extension to a MIME type the handlers understand. */
+const MIME_BY_EXTENSION: Record<string, string> = {
+  '.txt': 'text/plain',
+  '.md': 'text/plain',
+  '.pdf': 'application/pdf',
+};
+
+/**
+ * Runs the evaluation: ingests the corpus, runs each case through retrieval (and optionally
+ * generation), and returns a scored report.
+ *
+ * Retrieval metrics need only an embedding model and ChromaDB. Answer metrics additionally
+ * need a reachable LLM; when generation fails the run still returns retrieval metrics.
+ *
+ * @param options The run configuration.
+ * @returns The evaluation report.
+ */
+export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
+  const embedding = await createEmbedding();
+  const store = new ChromaVectorStore(config.chromaHost, config.chromaPort, options.collection);
+
+  await ingestCorpus(options, embedding, store);
+
+  const cases = await loadDataset(options.datasetPath);
+  const langModel = options.generateAnswers
+    ? new OllamaLangModelRunner(config.generationModel, config.ollamaHost)
+    : undefined;
+
+  const results: EvalCaseResult[] = [];
+  for (const evalCase of cases) {
+    results.push(await scoreCase(evalCase, options, embedding, store, langModel));
+  }
+
+  return { k: options.topK, generatedAnswers: options.generateAnswers, cases: results, aggregate: aggregate(results) };
+}
+
+/**
+ * Ingests every corpus file into the eval collection.
+ * @param options The run configuration.
+ * @param embedding The shared embedding model.
+ * @param store The eval vector store.
+ */
+async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnType<typeof createEmbedding>>, store: ChromaVectorStore): Promise<void> {
+  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
+  const ingestor = new RagDataIngestor(chunker, resolveFileHandler, embedding, store, config.embeddingBatchSize);
+
+  const entries = await fs.readdir(options.corpusDir);
+  const files: FileInfo[] = [];
+
+  for (const name of entries) {
+    const mimetype = MIME_BY_EXTENSION[path.extname(name).toLowerCase()];
+    if (!mimetype) {
+      continue;
+    }
+
+    const buffer = await fs.readFile(path.join(options.corpusDir, name));
+    files.push({ originalname: name, mimetype, size: buffer.length, encoding: '', buffer });
+  }
+
+  const summary = await ingestor.ingest(files, undefined, options.tenantId);
+  logger.info(`Eval corpus ingested: ${summary.chunks} chunk(s) from ${summary.sources} source(s).`);
+}
+
+/**
+ * Scores a single case: retrieves, computes retrieval metrics, and optionally generates an
+ * answer and scores keyword coverage.
+ */
+async function scoreCase(
+  evalCase: EvalCase,
+  options: RunEvalOptions,
+  embedding: Awaited<ReturnType<typeof createEmbedding>>,
+  store: ChromaVectorStore,
+  langModel?: OllamaLangModelRunner
+): Promise<EvalCaseResult> {
+  const [queryVector] = await embedding.embed([evalCase.question]);
+  const results = await store.search(queryVector, options.topK, { tenantId: options.tenantId });
+  const retrievedSources = results.map((result) => String(result.metadata?.source ?? ''));
+
+  const result: EvalCaseResult = {
+    id: evalCase.id,
+    question: evalCase.question,
+    retrievedSources,
+    precisionAtK: precisionAtK(retrievedSources, evalCase.expectedSources, options.topK),
+    recallAtK: recallAtK(retrievedSources, evalCase.expectedSources, options.topK),
+    reciprocalRank: reciprocalRank(retrievedSources, evalCase.expectedSources),
+    hit: hitAtK(retrievedSources, evalCase.expectedSources, options.topK),
+  };
+
+  if (langModel) {
+    try {
+      const answer = await langModel.generateResponse({ question: evalCase.question, sources: results, maxTokens: config.maxTokens });
+      result.answer = answer;
+      result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
+    } catch (error) {
+      logger.warn(`Generation failed for case ${evalCase.id}: ${error instanceof Error ? error.message : error}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Loads and parses a JSONL dataset of eval cases.
+ * @param datasetPath Path to the .jsonl file.
+ * @returns The parsed cases.
+ */
+export async function loadDataset(datasetPath: string): Promise<EvalCase[]> {
+  const raw = await fs.readFile(datasetPath, 'utf-8');
+
+  return raw
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('//'))
+    .map((line) => JSON.parse(line) as EvalCase);
+}
+
+/**
+ * Aggregates per-case results into means. Keyword coverage is averaged only over cases that
+ * produced an answer.
+ * @param results The per-case results.
+ * @returns The aggregate scores.
+ */
+function aggregate(results: EvalCaseResult[]): EvalAggregate {
+  const withCoverage = results.filter((result) => result.keywordCoverage !== undefined);
+
+  return {
+    precisionAtK: mean(results.map((result) => result.precisionAtK)),
+    recallAtK: mean(results.map((result) => result.recallAtK)),
+    mrr: mean(results.map((result) => result.reciprocalRank)),
+    hitRate: mean(results.map((result) => result.hit)),
+    keywordCoverage: withCoverage.length ? mean(withCoverage.map((result) => result.keywordCoverage!)) : undefined,
+  };
+}

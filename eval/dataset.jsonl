@@ -1,0 +1,10 @@
+{"id": "largest-planet", "question": "Which is the largest planet in the solar system?", "expectedSources": ["solar-system.txt"], "expectedKeywords": ["Jupiter"]}
+{"id": "sun-energy", "question": "How does the Sun produce energy?", "expectedSources": ["solar-system.txt"], "expectedKeywords": ["fusion", "hydrogen"]}
+{"id": "red-planet", "question": "Why is Mars called the red planet?", "expectedSources": ["solar-system.txt"], "expectedKeywords": ["iron oxide"]}
+{"id": "photosynthesis-products", "question": "What do plants produce during photosynthesis?", "expectedSources": ["photosynthesis.txt"], "expectedKeywords": ["glucose", "oxygen"]}
+{"id": "photosynthesis-location", "question": "Where in the plant cell does photosynthesis happen?", "expectedSources": ["photosynthesis.txt"], "expectedKeywords": ["chloroplast"]}
+{"id": "chlorophyll-pigment", "question": "What green pigment is involved in capturing light in plants?", "expectedSources": ["photosynthesis.txt"], "expectedKeywords": ["chlorophyll"]}
+{"id": "first-emperor", "question": "Who was the first Roman emperor?", "expectedSources": ["roman-empire.txt"], "expectedKeywords": ["Augustus"]}
+{"id": "western-rome-fall", "question": "When did the Western Roman Empire fall?", "expectedSources": ["roman-empire.txt"], "expectedKeywords": ["476"]}
+{"id": "roman-largest-extent", "question": "Under which emperor did the Roman Empire reach its greatest size?", "expectedSources": ["roman-empire.txt"], "expectedKeywords": ["Trajan"]}
+{"id": "cross-topic-colosseum", "question": "What large amphitheater in Rome could hold tens of thousands of spectators?", "expectedSources": ["roman-empire.txt"], "expectedKeywords": ["Colosseum"]}

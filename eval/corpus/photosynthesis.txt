@@ -1,0 +1,12 @@
+Photosynthesis
+
+Photosynthesis is the process by which green plants, algae, and some bacteria convert light
+energy into chemical energy. It takes place mainly in the leaves, inside organelles called
+chloroplasts, which contain the green pigment chlorophyll.
+
+During photosynthesis, plants take in carbon dioxide from the air and water from the soil.
+Using light energy, they produce glucose and release oxygen as a by-product. The overall
+reaction converts carbon dioxide and water into glucose and oxygen.
+
+The process has two main stages: the light-dependent reactions, which capture energy from
+sunlight, and the Calvin cycle, which uses that energy to build glucose from carbon dioxide.

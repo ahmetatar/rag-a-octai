@@ -191,7 +191,21 @@ yavaş sunucu). Job lifecycle testi.
 ---
 
 ### T3 — Değerlendirme (evaluation) harness'i
-**Durum:** Todo · **Öncelik:** P1 · **Bağımlılık:** T1 (opsiyonel), T4'ten ÖNCE olmalı
+**Durum:** ✅ Done (2026-07) · **Öncelik:** P1 · **Bağımlılık:** T4'ten ÖNCE (bitti)
+
+> **Yapıldı:** `npm run eval` → `eval/corpus`'u ayrı bir koleksiyona ingest edip
+> `eval/dataset.jsonl`'i skorluyor, tablo basıp `eval/results/latest.json` yazıyor (run'lar
+> diff'lenebilsin). Saf metrikler `src/core/rag/eval/metrics.ts`: precision@k, recall@k,
+> hit@k, reciprocal rank (MRR), keyword coverage — hepsi birim-test edilmiş (18 test).
+> Retrieval metrikleri sadece embedding + Chroma gerektiriyor; cevap metrikleri (keyword
+> coverage) `EVAL_GENERATE=true` ile opsiyonel (LLM gerektirir, yoksa graceful skip).
+> **Baseline (llama bge-small, k=3, 10 soru):** recall=100%, hitRate=100%, **MRR=0.950**,
+> P@3=33.3% (soru başına 1 kaynak olduğu için k=3'te yapısal tavan).
+> **Doğrulama:** 137 test (20 yeni: 18 metrik + 2 dataset), gerçek ChromaDB e2e ile
+> `latest.json` üretildi.
+> **T4 için not:** MRR ve P@1 asıl izlenecek metrikler (recall bu kolay corpus'ta zaten
+> tavanda). T4'te reranking/hybrid öncesi-sonrası bu harness'i çalıştırıp MRR farkını göster;
+> gerekirse distractor'lu daha zor sorular ekle. Faithfulness için LLM-judge sonraki artırım.
 
 **Amaç:** Retrieval ve cevap kalitesini ölçen bir eval iskeleti kur, böylece sonraki
 kalite değişiklikleri (T4) körlemesine değil ölçülerek yapılsın.
@@ -382,7 +396,7 @@ vektör DB değerlendir (pgvector / Qdrant / Weaviate). Karar dokümanı + gerek
 |------|------|---------|-----------------|
 | 1 | ✅ T1 Auth + tenant izolasyonu | P0 | Güvenlik açığı; her şeyden önce |
 | 2 | ✅ T2 Async ingest + dayanıklılık | P0 | İlk büyük dosyada patlar |
-| 3 | T3 Eval harness | P1 | Sonraki kalite işleri ölçülsün diye |
+| 3 | ✅ T3 Eval harness | P1 | Sonraki kalite işleri ölçülsün diye |
 | 4 | T4 Reranking + hybrid | P1 | Asıl kalite sıçraması (T3 ile ölçülerek) |
 | 5 | T5 Streaming + multi-turn | P2 | UX olgunluğu |
 | 6 | T6 Observability | P2 | Ops görünürlüğü |

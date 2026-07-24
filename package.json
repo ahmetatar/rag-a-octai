@@ -10,6 +10,7 @@
     "debug": "nodemon -r dotenv/config --watch 'src/**/*.ts' --exec 'node --inspect=0.0.0.0:9229 -r ts-node/register -r tsconfig-paths/register' src/index.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "eval": "ts-node -r dotenv/config -r tsconfig-paths/register src/eval.ts",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "compose:up": "podman-compose up -d",

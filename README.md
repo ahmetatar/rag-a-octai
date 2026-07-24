@@ -280,6 +280,23 @@ npm run test:ui
 npm run test:coverage
 ```
 
+## Evaluation
+
+A retrieval-quality harness lives in `eval/`. It ingests `eval/corpus/` into a dedicated
+collection, scores the questions in `eval/dataset.jsonl`, prints a table, and writes
+`eval/results/latest.json` so runs can be compared (e.g. before/after a retrieval change).
+
+```bash
+# Retrieval metrics only (needs ChromaDB + an embedding provider)
+npm run eval
+
+# Also generate answers and score keyword coverage (needs a reachable LLM)
+EVAL_GENERATE=true npm run eval
+```
+
+Metrics: precision@k, recall@k, hit@k, MRR, and (with generation) keyword coverage. Extend
+coverage by adding files to `eval/corpus/` and cases to `eval/dataset.jsonl`.
+
 ## Docker
 
 ### Production Setup
