@@ -1,5 +1,5 @@
 import config from '@app/config';
-import { ChromaVectorStore, SearchResult } from './vector-store';
+import { ChromaVectorStore, SearchResult, VectorStore } from './vector-store';
 import { BaseEmbedding, createEmbedding } from './embedding';
 import { LangModelBase, OllamaLangModelRunner, PromptContext } from './llm';
 import { createReranker, Reranker } from './reranking';
@@ -60,7 +60,7 @@ export class RagOrchestrator {
   constructor(
     private readonly langModel: LangModelBase,
     private readonly embedding: BaseEmbedding,
-    private readonly store: ChromaVectorStore,
+    private readonly store: VectorStore,
     private readonly reranker?: Reranker
   ) {}
 
@@ -84,9 +84,8 @@ export class RagOrchestrator {
     const queryEmbedding = await this.embedding.embed([query]);
     //2. Search the vector store, restricted to the tenant's own documents. With a reranker,
     //   fetch a wider candidate pool so it has more to choose from before we cut to top-K.
-    const where = tenantId ? { tenantId } : undefined;
     const fetchK = this.reranker ? Math.max(topK, config.rerankFetchK) : topK;
-    const candidates = await this.store.search(queryEmbedding[0], fetchK, where);
+    const candidates = await this.store.search(queryEmbedding[0], fetchK, tenantId);
 
     //3. Rerank the candidates (cross-encoder) and keep the best top-K, or use vector order.
     const results = (await this.rerank(query, candidates)).slice(0, topK);

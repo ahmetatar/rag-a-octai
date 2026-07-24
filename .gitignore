@@ -1,7 +1,8 @@
 node_modules
 dist
 coverage
-docs
+docs/*
+!docs/adr/
 .env
 .DS_Store
 .vscode

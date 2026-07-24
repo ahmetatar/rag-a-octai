@@ -1,7 +1,7 @@
-import { Document } from '../file-handlers';
 import { ChromaClient, Collection, Where } from 'chromadb';
 import { logger } from '@infrastructure/logging';
 import { resilientCall } from '../resilient-call';
+import { SearchResult, SourceSummary, UpsertItem, VectorStore } from './vector-store.interface';
 
 /**
  * Vector spaces supported by ChromaDB.
@@ -33,48 +33,14 @@ export function toSimilarity(distance: number, space: VectorSpace): number {
 }
 
 /**
- * Represents an item to be upserted into the ChromaDB collection.
- */
-export interface UpsertItem {
-  /** The unique identifier for the item. */
-  id: string;
-  /** The embedding vector for the item. */
-  embedding?: number[];
-  /** The text content of the item. */
-  text: string;
-  /** Optional metadata associated with the item. */
-  metadata?: Record<string, any>;
-}
-
-/**
- * Represents a search result from the ChromaDB collection.
- */
-export interface SearchResult extends Document {
-  /** The similarity score of the search result; a HIGHER value means a closer match. */
-  score: number;
-  /** The raw distance reported by ChromaDB; a LOWER value means a closer match. */
-  distance: number;
-}
-
-/**
- * A distinct source document held in the store, with how many chunks it was split into.
- */
-export interface SourceSummary {
-  /** The `source` metadata value identifying the document (its original file name). */
-  source: string;
-  /** How many chunks this source is stored as. */
-  chunks: number;
-}
-
-/**
- * ChromaVectorStore provides methods to interact with a ChromaDB vector store.
+ * ChromaVectorStore is the ChromaDB-backed implementation of {@link VectorStore}.
  * @example
  * const vectorStore = new ChromaVectorStore('localhost', 8000, 'my_collection');
  * await vectorStore.upsert(items);
  * const results = await vectorStore.search(queryVector, 5);
  * @see https://chroma.com/docs/ for more information on ChromaDB.
  */
-export class ChromaVectorStore {
+export class ChromaVectorStore implements VectorStore {
   private readonly chromaClient: ChromaClient;
   private readonly cache = new Map<string, Collection>();
 
@@ -171,12 +137,13 @@ export class ChromaVectorStore {
    * Searches the ChromaDB collection for the most similar items to the given query vector.
    * @param queryVector The query embedding vector.
    * @param topK The number of top similar items to retrieve.
-   * @param where Optional metadata filter (e.g. `{ tenantId }`) constraining the search.
+   * @param tenantId Optional tenant whose documents the search is restricted to.
    * @returns {SearchResult[]} An array of search results with id, text, metadata, distance and
    * similarity score, ordered from the closest match to the furthest.
    */
-  async search(queryVector: number[], topK: number, where?: Where): Promise<SearchResult[]> {
+  async search(queryVector: number[], topK: number, tenantId?: string): Promise<SearchResult[]> {
     const collection = await this.getCollection();
+    const where: Where | undefined = tenantId ? { tenantId } : undefined;
 
     const results = await resilientCall('chroma.query', () =>
       collection.query({

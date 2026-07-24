@@ -44,10 +44,10 @@ const DISTANT_MATCH: SearchResult = {
  */
 function orchestratorOver(results: SearchResult[], reranker?: Reranker) {
   const langModel = new RecordingLangModel();
-  const searchCalls: { topK: number; where: unknown }[] = [];
+  const searchCalls: { topK: number; tenantId?: string }[] = [];
   const store = {
-    search: async (_vector: number[], topK: number, where?: unknown) => {
-      searchCalls.push({ topK, where });
+    search: async (_vector: number[], topK: number, tenantId?: string) => {
+      searchCalls.push({ topK, tenantId });
       return results;
     },
   } as never;
@@ -141,7 +141,7 @@ describe('RagOrchestrator.query', () => {
 
     await orchestrator.query('question?', 3, 0.45, 128, 'acme');
 
-    expect(searchCalls[0].where).toEqual({ tenantId: 'acme' });
+    expect(searchCalls[0].tenantId).toBe('acme');
   });
 
   it('does not filter by tenant when none is given', async () => {
@@ -149,7 +149,7 @@ describe('RagOrchestrator.query', () => {
 
     await orchestrator.query('question?', 3, 0.45);
 
-    expect(searchCalls[0].where).toBeUndefined();
+    expect(searchCalls[0].tenantId).toBeUndefined();
   });
 });
 

@@ -456,7 +456,22 @@ prompt içeriği assertion'ı).
 ---
 
 ### T9 — Ölçeklenebilir vektör DB & kalıcılık stratejisi (araştırma + karar)
-**Durum:** Todo · **Öncelik:** P3 · **Bağımlılık:** yok
+**Durum:** ✅ Done (2026-07) · **Öncelik:** P3 · **Bağımlılık:** yok
+
+> **Yapıldı:** `VectorStore` soyut arayüzü çıkarıldı (`vector-store.interface.ts`:
+> `upsert`/`search`/`deleteBySource`/`listSources` + `UpsertItem`/`SearchResult`/`SourceSummary`
+> taşındı). `ChromaVectorStore implements VectorStore`. Orchestrator, ingestor, documents.route
+> ve eval/runner artık **arayüze** bağımlı (fabrikalar hâlâ `new ChromaVectorStore`). Arayüz
+> backend-agnostik: `search`'ün chromadb-tipli `where` parametresi düz **`tenantId`** ile
+> değiştirildi (üç metot da tenant-scoping'de tutarlı; chromadb tipi arayüzden çıktı). Karar
+> dokümanı: **`docs/adr/0001-vector-store-abstraction-and-backend-strategy.md`** — Chroma vs
+> pgvector vs Qdrant vs Weaviate trade-off tablosu; **öneri: pgvector** (HA/backup/ölçek *veya*
+> hibrit gerekince → `tsvector`+RRF ile **T4b hibrit bedava** gelir; çok büyük N/latency baskınsa
+> Qdrant). Migrasyon = arayüz ardında tek yeni sınıf + fabrika switch.
+> **Doğrulama:** Arayüz refactor'ı sonrası **172 test yeşil** (chroma search-tenant testi yeni
+> `tenantId` imzasına, orchestrator mock'u güncellendi). Mutasyonla doğrulandı (search `where`
+> →undefined → tenant-scope testi kırmızı). **Gerçek Chroma e2e** (arayüz üzerinden): tenant-scoped
+> search yalnız acme'nin 3 chunk'ını döndürdü, cross-tenant liste/silme izolasyonu korundu.
 
 **Amaç:** Tek-düğüm ChromaDB'nin ötesinde replikasyon/backup/ölçek için yönetilen bir
 vektör DB değerlendir (pgvector / Qdrant / Weaviate). Karar dokümanı + gerekirse
@@ -486,11 +501,15 @@ vektör DB değerlendir (pgvector / Qdrant / Weaviate). Karar dokümanı + gerek
 | 2 | ✅ T2 Async ingest + dayanıklılık | P0 | İlk büyük dosyada patlar |
 | 3 | ✅ T3 Eval harness | P1 | Sonraki kalite işleri ölçülsün diye |
 | 4 | 🟡 T4 Reranking (hibrit ertelendi) | P1 | Asıl kalite sıçraması (T3 ile ölçüldü: MRR 0.95→1.0) |
-| 5 | T5 Streaming + multi-turn | P2 | UX olgunluğu |
-| 6 | T6 Observability | P2 | Ops görünürlüğü |
-| 7 | T7 Veri yönetimi + format | P2 | Uyumluluk (KVKK) + kapsam |
-| 8 | T8 Prompt injection savunması | P2 | Güvenlik sertleştirme |
-| 9 | T9 Vektör DB ölçek kararı | P3 | Uzun vadeli altyapı |
+| 5 | ⏸️ T5 Streaming + multi-turn (ertelendi) | P2 | UX olgunluğu; chat istemcisi gelince |
+| 6 | 🟢 T6 Observability (OTel ertelendi) | P2 | Ops görünürlüğü |
+| 7 | 🟢 T7 Veri yönetimi + format (docx/csv+PII ertelendi) | P2 | Uyumluluk (KVKK) + kapsam |
+| 8 | 🟢 T8 Prompt injection savunması | P2 | Güvenlik sertleştirme |
+| 9 | ✅ T9 Vektör DB ölçek kararı | P3 | Uzun vadeli altyapı |
 
 > Her task bitince: bu tablodaki ve task başlığındaki **Durum**'u `Done` yap, kısa bir
 > "ne yapıldı + nasıl doğrulandı" notu ekle.
+>
+> **Roadmap çekirdeği tamamlandı (2026-07):** T1–T9 ele alındı. Ertelenen opsiyonel işler
+> (koşullu): T5 streaming (chat istemcisi gelince), T6 OTel tracing (trace backend gelince),
+> T7 docx/csv + PII maskeleme, T8 enjeksiyon desen-tespiti, T4b hibrit (T9→pgvector ile).

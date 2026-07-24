@@ -2,7 +2,7 @@ import config from '@app/config';
 import { Chunker, RecursiveChunker } from './chunkers';
 import { Document, FileHandlerResolver, FileInfo, HandlerResolveParameters, resolveFileHandler } from './file-handlers';
 import { BaseEmbedding, createEmbedding } from './embedding';
-import { ChromaVectorStore, UpsertItem } from './vector-store';
+import { ChromaVectorStore, UpsertItem, VectorStore } from './vector-store';
 import { logger } from '@infrastructure/logging';
 
 /**
@@ -44,7 +44,7 @@ export class RagDataIngestor {
     private readonly chunker: Chunker,
     private readonly resolveHandler: FileHandlerResolver,
     private readonly embedding: BaseEmbedding,
-    private readonly store: ChromaVectorStore,
+    private readonly store: VectorStore,
     private readonly embeddingBatchSize = 64
   ) {}
 

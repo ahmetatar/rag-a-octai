@@ -1,6 +1,6 @@
 import express from 'express';
 import config from '@app/config';
-import { ChromaVectorStore } from '@core/rag/vector-store';
+import { ChromaVectorStore, VectorStore } from '@core/rag/vector-store';
 import { tenantOf } from '@infrastructure/http';
 import { logger } from '@infrastructure/logging';
 
@@ -8,7 +8,7 @@ const router = express.Router();
 
 // One store instance for the route. The constructor only wires a client (no network), so it
 // is safe to build at module load; the connection is opened lazily on first use.
-const store = new ChromaVectorStore(config.chromaHost, config.chromaPort, config.chromaCollection);
+const store: VectorStore = new ChromaVectorStore(config.chromaHost, config.chromaPort, config.chromaCollection);
 
 /**
  * GET /documents

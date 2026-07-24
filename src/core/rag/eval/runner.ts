@@ -8,7 +8,7 @@ import { FileInfo, resolveFileHandler } from '../file-handlers';
 import { RagDataIngestor } from '../ingestion';
 import { OllamaLangModelRunner } from '../llm';
 import { Reranker } from '../reranking';
-import { ChromaVectorStore, SearchResult } from '../vector-store';
+import { ChromaVectorStore, SearchResult, VectorStore } from '../vector-store';
 import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
@@ -76,7 +76,7 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
  * @param embedding The shared embedding model.
  * @param store The eval vector store.
  */
-async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnType<typeof createEmbedding>>, store: ChromaVectorStore): Promise<void> {
+async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnType<typeof createEmbedding>>, store: VectorStore): Promise<void> {
   const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
   const ingestor = new RagDataIngestor(chunker, resolveFileHandler, embedding, store, config.embeddingBatchSize);
 
@@ -105,13 +105,13 @@ async function scoreCase(
   evalCase: EvalCase,
   options: RunEvalOptions,
   embedding: Awaited<ReturnType<typeof createEmbedding>>,
-  store: ChromaVectorStore,
+  store: VectorStore,
   langModel?: OllamaLangModelRunner
 ): Promise<EvalCaseResult> {
   const [queryVector] = await embedding.embed([evalCase.question]);
   // Mirror the orchestrator: with a reranker, fetch a wider pool, rerank, then cut to topK.
   const fetchK = options.reranker ? Math.max(options.topK, options.fetchK ?? options.topK) : options.topK;
-  const candidates = await store.search(queryVector, fetchK, { tenantId: options.tenantId });
+  const candidates = await store.search(queryVector, fetchK, options.tenantId);
   const results = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
   const retrievedSources = results.map((result) => String(result.metadata?.source ?? ''));
 
