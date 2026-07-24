@@ -368,7 +368,29 @@ uçtan uca trace ve bağımlılık-hazırlık kontrolü gerekir.
 ---
 
 ### T7 — Veri yönetimi: silme/güncelleme uçları + format genişletme + PII
-**Durum:** Todo · **Öncelik:** P2 · **Bağımlılık:** T1 (tenant-scoped silme)
+**Durum:** 🟢 Silme/listeleme + html format Done (2026-07); docx/csv + PII ertelendi · **Öncelik:** P2 · **Bağımlılık:** T1 (tenant-scoped silme)
+
+> **Yapıldı (silme/listeleme):** Yeni `src/routes/documents.route.ts` (auth arkasında,
+> tenant-scoped). `GET /documents` → `{documents:[{source,chunks}]}` (tenant'ın distinct
+> kaynakları + chunk sayıları). `DELETE /documents/:source` → önce `listSources` ile varlık
+> kontrolü (bilinmeyen ad → 404, sessiz no-op yerine), sonra tenant-scoped `deleteBySource` →
+> `{status:'ok',source,deletedChunks}`. Yeni `ChromaVectorStore.listSources(tenantId)`:
+> `collection.get({include:['metadatas'], where:{tenantId}})` → distinct source + sayım,
+> ada göre sıralı, kaynağı olmayan chunk'ları eler. `SourceSummary` tipi eklendi.
+> **Yapıldı (format):** `HtmlFileHandler` (node-html-parser: script/style/noscript strip →
+> `structuredText` [blok sınırları korunur] → `DefaultTextProcessor`). `text/html` registry'ye
+> eklendi (`app.ts`).
+> **Doğrulama:** +10 test (listSources 4, html handler 4, documents route auth 2); toplam
+> **169 yeşil**. Mutasyonla doğrulandı (listSources tenant `where`→undefined, html removal
+> kapatıldı → kırmızı). **Gerçek ChromaDB e2e** (Ollama'sız, sahte embedding): acme 2 doküman
+> (a.txt×2+b.txt×1) + globex 1 (a.txt×1) upsert → listSources tenant-scoped & sayım doğru →
+> `DELETE acme/a.txt` → acme'de sadece b.txt kaldı, **globex/a.txt hayatta** (cross-tenant
+> silme izolasyonu). Uç auth arkasında (401 doğrulandı).
+>
+> **ERTELENDİ:** (1) **docx** (mammoth) + **csv** — kullanıcı şimdilik yalnız html istedi;
+> aynı handler deseniyle sonra eklenir. (2) **PII maskeleme** — regex-tabanlı email/telefon/TCKN
+> maskeleme kendi başına bir konu (eksik/riskli olabilir); opt-in minimal bir `text-processors`
+> adımı olarak ayrı ele alınacak. Kabul kriterleri (silme + ≥1 yeni format) zaten karşılandı.
 
 **Amaç:** Doküman silme/listeleme uçları aç, desteklenen formatları genişlet, ingest'te
 PII maskeleme opsiyonu ekle.

@@ -57,6 +57,16 @@ export interface SearchResult extends Document {
 }
 
 /**
+ * A distinct source document held in the store, with how many chunks it was split into.
+ */
+export interface SourceSummary {
+  /** The `source` metadata value identifying the document (its original file name). */
+  source: string;
+  /** How many chunks this source is stored as. */
+  chunks: number;
+}
+
+/**
  * ChromaVectorStore provides methods to interact with a ChromaDB vector store.
  * @example
  * const vectorStore = new ChromaVectorStore('localhost', 8000, 'my_collection');
@@ -123,6 +133,38 @@ export class ChromaVectorStore {
     const collection = await this.getCollection();
     const where: Where = tenantId ? { $and: [{ source }, { tenantId }] } : { source };
     await resilientCall('chroma.delete', () => collection.delete({ where }));
+  }
+
+  /**
+   * Lists the distinct source documents held for a tenant, with how many chunks each has.
+   *
+   * Backs the document-management endpoints (list / delete): a caller needs to know what it
+   * has ingested before it can decide what to remove. Only metadata is fetched (not the
+   * embeddings or text), and the result is scoped to the tenant so one tenant never sees
+   * another's documents.
+   *
+   * @param tenantId Optional tenant to scope the listing to.
+   * @returns One entry per source, with its chunk count, sorted by source name.
+   */
+  async listSources(tenantId?: string): Promise<SourceSummary[]> {
+    const collection = await this.getCollection();
+    const where: Where | undefined = tenantId ? { tenantId } : undefined;
+
+    const result = await resilientCall('chroma.get', () =>
+      collection.get({ include: ['metadatas'], ...(where ? { where } : {}) })
+    );
+
+    const counts = new Map<string, number>();
+    for (const metadata of result.metadatas ?? []) {
+      const source = metadata?.source;
+      if (typeof source === 'string' && source) {
+        counts.set(source, (counts.get(source) ?? 0) + 1);
+      }
+    }
+
+    return [...counts.entries()]
+      .map(([source, chunks]) => ({ source, chunks }))
+      .sort((a, b) => a.source.localeCompare(b.source));
   }
 
   /**

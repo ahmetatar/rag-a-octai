@@ -4,7 +4,7 @@ import cors from 'cors';
 import rateLimit from 'express-rate-limit';
 import config from '@app/config';
 import * as routes from '@routes/index';
-import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler } from '@core/rag';
+import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler, createHtmlFileHandler } from '@core/rag';
 import { authMiddleware, errorHandler, notFoundHandler } from '@infrastructure/http';
 import { correlationIdMiddleware, metricsMiddleware, metricsHandler } from '@infrastructure/observability';
 
@@ -16,6 +16,7 @@ import { correlationIdMiddleware, metricsMiddleware, metricsHandler } from '@inf
 function registerDefaultFileHandlers(): void {
   registerFileHandlers({
     'text/plain': createTextFileHandler(),
+    'text/html': createHtmlFileHandler(),
     'application/pdf': createPdfPageFileHandler(),
   });
 }
@@ -84,6 +85,7 @@ export function createApp(): Express {
   app.use('/health', routes.healthRouter);
   app.use('/ingest', authMiddleware(), routes.ingestionRouter);
   app.use('/query', authMiddleware(), routes.queryRouter);
+  app.use('/documents', authMiddleware(), routes.documentsRouter);
 
   // Both must stay last: Express matches middleware in registration order, so a route
   // registered after them would never be reached.

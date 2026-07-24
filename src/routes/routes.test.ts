@@ -168,6 +168,26 @@ describe('authentication (when enabled)', () => {
   });
 });
 
+describe('document management endpoints', () => {
+  it('requires a key for GET /documents when auth is enabled', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await fetch(`${baseUrl}/documents`);
+
+    expect(response.status).toBe(401);
+  });
+
+  it('requires a key for DELETE /documents/:source when auth is enabled', async () => {
+    config.authEnabled = true;
+    config.apiKeys = { 'sk-acme': 'acme' };
+
+    const response = await fetch(`${baseUrl}/documents/handbook.pdf`, { method: 'DELETE' });
+
+    expect(response.status).toBe(401);
+  });
+});
+
 describe('unknown routes', () => {
   it('answers with JSON rather than Express\' HTML error page', async () => {
     const response = await fetch(`${baseUrl}/does-not-exist`);

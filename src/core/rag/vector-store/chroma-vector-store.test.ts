@@ -186,6 +186,69 @@ describe('ChromaVectorStore.deleteBySource', () => {
   });
 });
 
+describe('ChromaVectorStore.listSources', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A collection stub whose `get` returns the given per-chunk metadatas. */
+  function collectionWithMetadatas(metadatas: Record<string, unknown>[]) {
+    return {
+      configuration: { hnsw: { space: 'cosine' } },
+      get: vi.fn(async (_args: Record<string, unknown>) => ({ metadatas })),
+      query: vi.fn(),
+      upsert: vi.fn(),
+      delete: vi.fn(),
+    };
+  }
+
+  it('collapses chunks into distinct sources with their chunk counts, sorted by name', async () => {
+    collection = collectionWithMetadatas([
+      { source: 'b.txt' },
+      { source: 'a.pdf' },
+      { source: 'b.txt' },
+      { source: 'b.txt' },
+    ]);
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    const sources = await store.listSources();
+
+    expect(sources).toEqual([
+      { source: 'a.pdf', chunks: 1 },
+      { source: 'b.txt', chunks: 3 },
+    ]);
+  });
+
+  it('scopes the listing to a tenant when given', async () => {
+    const recording = collectionWithMetadatas([{ source: 'a.pdf' }]);
+    collection = recording;
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    await store.listSources('acme');
+
+    expect(recording.get.mock.calls[0][0]).toMatchObject({ where: { tenantId: 'acme' } });
+  });
+
+  it('omits the where clause when no tenant is given', async () => {
+    const recording = collectionWithMetadatas([{ source: 'a.pdf' }]);
+    collection = recording;
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    await store.listSources();
+
+    expect(recording.get.mock.calls[0][0]).not.toHaveProperty('where');
+  });
+
+  it('ignores chunks that carry no usable source', async () => {
+    collection = collectionWithMetadatas([{ source: 'a.pdf' }, { page: 2 }, { source: '' }]);
+    const store = new ChromaVectorStore('localhost', 8000, 'docs');
+
+    const sources = await store.listSources();
+
+    expect(sources).toEqual([{ source: 'a.pdf', chunks: 1 }]);
+  });
+});
+
 describe('ChromaVectorStore.search — tenant filter', () => {
   beforeEach(() => {
     vi.restoreAllMocks();
