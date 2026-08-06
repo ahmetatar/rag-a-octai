@@ -59,22 +59,7 @@ export function recallAtK(retrieved: string[], expected: string[], k: number): n
  * @param k Cut-off rank.
  */
 export function hitAtK(retrieved: string[], expected: string[], k: number): number {
-  if (expected.length === 0) {
-    return 0;
-  }
   return recallAtK(retrieved, expected, k) > 0 ? 1 : 0;
-}
-
-/**
- * Detects whether a response explicitly declines to answer because the supplied context is
- * insufficient. This is intentionally deterministic so eval results are repeatable; it is a
- * lightweight guardrail rather than a semantic answer judge.
- *
- * @param answer Generated answer to inspect.
- * @returns True when the answer includes a recognised abstention phrase.
- */
-export function isAbstention(answer: string): boolean {
-  return /\b(?:cannot|can't|unable to|do not have|don't have|not enough information|insufficient (?:information|context)|no relevant (?:information|context))\b|\b(?:bilmiyorum|yanıtlayamam|cevaplayamam)\b|yeterli (?:bilgi|bağlam).{0,40}(?:yok|bulunmuyor)/i.test(answer);
 }
 
 /**

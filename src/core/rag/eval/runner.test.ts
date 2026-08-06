@@ -13,10 +13,7 @@ describe('loadDataset', () => {
       expect(evalCase.id).toBeTruthy();
       expect(evalCase.question).toBeTruthy();
       expect(Array.isArray(evalCase.expectedSources)).toBe(true);
-      expect(typeof evalCase.expectedAnswerable).toBe('boolean');
-      if (evalCase.expectedAnswerable) {
-        expect(evalCase.expectedSources.length).toBeGreaterThan(0);
-      }
+      expect(evalCase.expectedSources.length).toBeGreaterThan(0);
     }
   });
 

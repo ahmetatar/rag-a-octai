@@ -9,7 +9,7 @@ import { RagDataIngestor } from '../ingestion';
 import { OllamaLangModelRunner } from '../llm';
 import { Reranker } from '../reranking';
 import { ChromaVectorStore, SearchResult, VectorStore } from '../vector-store';
-import { hitAtK, isAbstention, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
+import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
 /**
@@ -24,8 +24,6 @@ export interface RunEvalOptions {
   collection: string;
   /** Retrieval cut-off. */
   topK: number;
-  /** Minimum retrieval/reranking score, matching the production query pipeline. */
-  threshold: number;
   /** Tenant to tag/scope the eval corpus under. */
   tenantId: string;
   /** When true, generate answers and score keyword coverage (needs a working LLM). */
@@ -69,7 +67,7 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
     results.push(await scoreCase(evalCase, options, embedding, store, langModel));
   }
 
-  return { k: options.topK, generatedAnswers: options.generateAnswers, cases: results, aggregate: aggregateEvalResults(results) };
+  return { k: options.topK, generatedAnswers: options.generateAnswers, cases: results, aggregate: aggregate(results) };
 }
 
 /**
@@ -114,17 +112,12 @@ async function scoreCase(
   // Mirror the orchestrator: with a reranker, fetch a wider pool, rerank, then cut to topK.
   const fetchK = options.reranker ? Math.max(options.topK, options.fetchK ?? options.topK) : options.topK;
   const candidates = await store.search(queryVector, fetchK, options.tenantId);
-  // Keep this ordering and threshold behaviour aligned with RagOrchestrator.query.
-  const results = (await rerankCandidates(evalCase.question, candidates, options.reranker))
-    .slice(0, options.topK)
-    .filter((result) => result.score >= options.threshold);
+  const results = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
   const retrievedSources = results.map((result) => String(result.metadata?.source ?? ''));
-  const expectedAnswerable = evalCase.expectedAnswerable ?? evalCase.expectedSources.length > 0;
 
   const result: EvalCaseResult = {
     id: evalCase.id,
     question: evalCase.question,
-    expectedAnswerable,
     retrievedSources,
     precisionAtK: precisionAtK(retrievedSources, evalCase.expectedSources, options.topK),
     recallAtK: recallAtK(retrievedSources, evalCase.expectedSources, options.topK),
@@ -132,21 +125,11 @@ async function scoreCase(
     hit: hitAtK(retrievedSources, evalCase.expectedSources, options.topK),
   };
 
-  if (!expectedAnswerable) {
-    result.falseRetrieval = results.length > 0 ? 1 : 0;
-  }
-
   if (langModel) {
     try {
       const answer = await langModel.generateResponse({ question: evalCase.question, sources: results, maxTokens: config.maxTokens });
       result.answer = answer;
-      if (expectedAnswerable) {
-        result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
-      }
-      if (!expectedAnswerable && (evalCase.expectedRefusal ?? true)) {
-        result.abstained = isAbstention(answer) ? 1 : 0;
-        result.falseAnswer = result.abstained ? 0 : 1;
-      }
+      result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
     } catch (error) {
       logger.warn(`Generation failed for case ${evalCase.id}: ${error instanceof Error ? error.message : error}`);
     }
@@ -195,28 +178,14 @@ export async function loadDataset(datasetPath: string): Promise<EvalCase[]> {
  * @param results The per-case results.
  * @returns The aggregate scores.
  */
-export function aggregateEvalResults(results: EvalCaseResult[]): EvalAggregate {
-  const answerable = results.filter((result) => result.expectedAnswerable);
-  const unanswerable = results.filter((result) => !result.expectedAnswerable);
-  const withCoverage = answerable.filter((result) => result.keywordCoverage !== undefined);
-  const withAbstention = unanswerable.filter((result) => result.abstained !== undefined);
+function aggregate(results: EvalCaseResult[]): EvalAggregate {
+  const withCoverage = results.filter((result) => result.keywordCoverage !== undefined);
 
   return {
-    answerableCases: answerable.length,
-    unanswerableCases: unanswerable.length,
-    precisionAtK: mean(answerable.map((result) => result.precisionAtK)),
-    recallAtK: mean(answerable.map((result) => result.recallAtK)),
-    mrr: mean(answerable.map((result) => result.reciprocalRank)),
-    hitRate: mean(answerable.map((result) => result.hit)),
+    precisionAtK: mean(results.map((result) => result.precisionAtK)),
+    recallAtK: mean(results.map((result) => result.recallAtK)),
+    mrr: mean(results.map((result) => result.reciprocalRank)),
+    hitRate: mean(results.map((result) => result.hit)),
     keywordCoverage: withCoverage.length ? mean(withCoverage.map((result) => result.keywordCoverage!)) : undefined,
-    falseRetrievalRate: unanswerable.length
-      ? mean(unanswerable.map((result) => result.falseRetrieval ?? 0))
-      : undefined,
-    abstentionAccuracy: withAbstention.length
-      ? mean(withAbstention.map((result) => result.abstained!))
-      : undefined,
-    falseAnswerRate: withAbstention.length
-      ? mean(withAbstention.map((result) => result.falseAnswer!))
-      : undefined,
   };
 }

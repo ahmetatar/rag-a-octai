@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { hitAtK, isAbstention, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
+import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
 
 describe('precisionAtK', () => {
   it('is 1 when every top-k chunk is relevant', () => {
@@ -47,24 +47,6 @@ describe('hitAtK', () => {
 
   it('is 0 when no relevant source is in the top-k', () => {
     expect(hitAtK(['x', 'a'], ['a'], 1)).toBe(0);
-  });
-
-  it('is 0 when no source is expected', () => {
-    expect(hitAtK(['x'], [], 3)).toBe(0);
-  });
-});
-
-describe('isAbstention', () => {
-  it('recognises a safe English refusal', () => {
-    expect(isAbstention("I don't have enough information in the context to answer.")).toBe(true);
-  });
-
-  it('recognises a safe Turkish refusal', () => {
-    expect(isAbstention('Bu soruyu yanıtlayamam; bağlamda yeterli bilgi yok.')).toBe(true);
-  });
-
-  it('does not treat a substantive answer as an abstention', () => {
-    expect(isAbstention('Jupiter is the largest planet in the Solar System.')).toBe(false);
   });
 });
 
