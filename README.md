@@ -87,8 +87,9 @@ eval/                      # Evaluation corpus + dataset (see EVAL_AND_RERANKING
    DEBUG=false
 
    # Chunking
-   CHUNK_SIZE=1000
-   CHUNK_OVERLAP=0
+   CHUNK_SIZE=400
+   CHUNK_OVERLAP=60
+   CHUNK_UNIT=tokens
 
    # RAG Configuration
    RAG_TOP_K=3
@@ -288,8 +289,9 @@ curl http://localhost:3000/metrics
 |---------------------|-------------|---------|
 | `PORT` | Server port | `3000` |
 | `DEBUG` | Enable debug mode | `false` |
-| `CHUNK_SIZE` | Text chunk size | `1000` |
-| `CHUNK_OVERLAP` | Overlap between chunks | `0` |
+| `CHUNK_SIZE` | Text chunk size in `CHUNK_UNIT` | `400` |
+| `CHUNK_OVERLAP` | Chunk overlap in `CHUNK_UNIT` | `60` |
+| `CHUNK_UNIT` | `tokens` (approximate, default) or `characters` | `tokens` |
 | `EMBEDDING_BATCH_SIZE` | Chunks embedded per batch during ingestion | `64` |
 | `QUEUE_DRIVER` | Ingest queue: `bull` (BullMQ+Redis, durable) or `memory` (in-process) | `bull` |
 | `REDIS_URL` | Redis connection URL for the `bull` driver | `redis://localhost:6379` |
