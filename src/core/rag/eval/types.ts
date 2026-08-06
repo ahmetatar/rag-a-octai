@@ -18,6 +18,12 @@ export interface EvalCase {
    * Defaults to true when expectedAnswerable is false.
    */
   expectedRefusal?: boolean;
+  /** Evaluation intent, used to ensure the golden set has meaningful coverage. */
+  category?: 'direct' | 'indirect' | 'distractor' | 'multi-source' | 'unanswerable';
+  /** Human-readable explanation of why the expected sources constitute a correct answer. */
+  rationale?: string;
+  /** Stable source/section evidence; chunk ids are deliberately excluded until chunking is stable. */
+  expectedEvidence?: Array<{ source: string; section: string }>;
   /** Key facts the generated answer should mention (optional; enables answer scoring). */
   expectedKeywords?: string[];
 }
