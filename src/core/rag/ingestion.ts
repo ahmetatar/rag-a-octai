@@ -20,7 +20,7 @@ export interface IngestSummary {
 }
 
 export async function createRagDataIngestor(): Promise<RagDataIngestor> {
-  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap, unit: config.chunkUnit });
+  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
   const embedding = await createEmbedding();
   const store = new ChromaVectorStore(config.chromaHost, config.chromaPort, config.chromaCollection);
 

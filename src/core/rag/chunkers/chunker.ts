@@ -1,16 +1,14 @@
-import { v4 as uuidv4 } from 'uuid';
+import uuid from 'uuid';
 import { Document } from '../file-handlers';
 
 /**
  * Options for chunking text into smaller pieces.
  */
 export interface ChunkingOptions {
-  /** The maximum size of each chunk in the configured unit. */
+  /** The maximum size of each chunk */
   chunkSize: number;
-  /** The number of units to overlap between chunks. */
+  /** The number of characters to overlap between chunks */
   overlap?: number;
-  /** Approximate token counts give model-oriented chunk boundaries; characters preserve legacy behaviour. */
-  unit?: 'tokens' | 'characters';
 }
 
 /**
@@ -34,7 +32,7 @@ export abstract class Chunker {
    */
   protected createChunk(content: string, metadata?: Record<string, any>): Document {
     return {
-      id: `chunk-${uuidv4()}`,
+      id: `chunk-${uuid.v4()}`,
       content,
       metadata,
     };

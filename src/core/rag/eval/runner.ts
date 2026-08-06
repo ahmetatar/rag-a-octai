@@ -79,7 +79,7 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
  * @param store The eval vector store.
  */
 async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnType<typeof createEmbedding>>, store: VectorStore): Promise<void> {
-  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap, unit: config.chunkUnit });
+  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
   const ingestor = new RagDataIngestor(chunker, resolveFileHandler, embedding, store, config.embeddingBatchSize);
 
   const entries = await fs.readdir(options.corpusDir);

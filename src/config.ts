@@ -13,11 +13,9 @@ export default {
   /** Enable or disable debug mode */
   debugMode: process.env.DEBUG === 'true',
   /** Size of text chunks */
-  chunkSize: process.env.CHUNK_SIZE ? parseInt(process.env.CHUNK_SIZE) : 400,
+  chunkSize: process.env.CHUNK_SIZE ? parseInt(process.env.CHUNK_SIZE) : 1000,
   /** Overlap between text chunks */
-  chunkOverlap: process.env.CHUNK_OVERLAP ? parseInt(process.env.CHUNK_OVERLAP) : 60,
-  /** Unit used for chunk sizing; approximate tokens are the model-oriented default. */
-  chunkUnit: (process.env.CHUNK_UNIT === 'characters' ? 'characters' : 'tokens') as 'characters' | 'tokens',
+  chunkOverlap: process.env.CHUNK_OVERLAP ? parseInt(process.env.CHUNK_OVERLAP) : 0,
   /** Number of chunks embedded per batch during ingestion */
   embeddingBatchSize: process.env.EMBEDDING_BATCH_SIZE ? parseInt(process.env.EMBEDDING_BATCH_SIZE) : 64,
   /** Number of top documents to retrieve */
