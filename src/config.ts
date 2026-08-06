@@ -14,8 +14,15 @@ export default {
   debugMode: process.env.DEBUG === 'true',
   /** Size of text chunks */
   chunkSize: process.env.CHUNK_SIZE ? parseInt(process.env.CHUNK_SIZE) : 1000,
-  /** Overlap between text chunks */
-  chunkOverlap: process.env.CHUNK_OVERLAP ? parseInt(process.env.CHUNK_OVERLAP) : 0,
+  /**
+   * Characters each chunk repeats from the end of the previous one, ~15% of `chunkSize`.
+   *
+   * Not zero: the splitter cuts on character count, so with no overlap a sentence that
+   * straddles a boundary is torn in half and neither chunk carries the whole fact. A query
+   * matching that fact then finds two partial chunks instead of one complete one. The
+   * overlap costs ~15% more vectors and buys a boundary that no longer destroys meaning.
+   */
+  chunkOverlap: process.env.CHUNK_OVERLAP ? parseInt(process.env.CHUNK_OVERLAP) : 150,
   /** Number of chunks embedded per batch during ingestion */
   embeddingBatchSize: process.env.EMBEDDING_BATCH_SIZE ? parseInt(process.env.EMBEDDING_BATCH_SIZE) : 64,
   /** Number of top documents to retrieve */

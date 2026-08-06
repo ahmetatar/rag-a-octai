@@ -88,7 +88,7 @@ eval/                      # Evaluation corpus + dataset (see EVAL_AND_RERANKING
 
    # Chunking
    CHUNK_SIZE=1000
-   CHUNK_OVERLAP=0
+   CHUNK_OVERLAP=150
 
    # RAG Configuration
    RAG_TOP_K=3
@@ -296,7 +296,7 @@ curl http://localhost:3000/metrics
 | `PORT` | Server port | `3000` |
 | `DEBUG` | Enable debug mode | `false` |
 | `CHUNK_SIZE` | Text chunk size | `1000` |
-| `CHUNK_OVERLAP` | Overlap between chunks | `0` |
+| `CHUNK_OVERLAP` | Characters each chunk repeats from the previous one (~15% of `CHUNK_SIZE`) | `150` |
 | `EMBEDDING_BATCH_SIZE` | Chunks embedded per batch during ingestion | `64` |
 | `QUEUE_DRIVER` | Ingest queue: `bull` (BullMQ+Redis, durable) or `memory` (in-process) | `bull` |
 | `REDIS_URL` | Redis connection URL for the `bull` driver | `redis://localhost:6379` |
@@ -359,6 +359,23 @@ npm run eval
 # Same, but with reranking enabled — compare the MRR against the plain run
 RERANK_ENABLED=true RERANK_MODEL_PATH=./models/<reranker>.gguf npm run eval
 ```
+
+**Reranking is recommended in production.** It defaults to off only because it needs a GGUF
+model on disk. Measured on the shipped eval set (bge-small embeddings, k=3, threshold 0.45):
+
+| Metric | Reranker off | Reranker on |
+|---|---|---|
+| precision@k | 61.7% | **100.0%** |
+| MRR | 0.950 | **1.000** |
+| false retrieval rate | 85.7% | **14.3%** |
+| retrieval latency | 18 ms | 235 ms |
+
+The last two are the trade: the cross-encoder stops questions the corpus cannot answer from
+pulling back on-topic-but-irrelevant chunks, and costs roughly 13× the retrieval latency to do
+it (still small next to generation, which is ~2 s). Note that `RETRIEVAL_THRESHOLD` is applied
+to whichever score is current — cosine similarity without a reranker, the cross-encoder's
+relevance score with one — so the same number is not equally strict in both modes. Re-tune it
+when you switch.
 
 👉 **Full guide with a step-by-step walkthrough:** [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 

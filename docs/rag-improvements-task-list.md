@@ -39,11 +39,46 @@ Bu baseline'ın söyledikleri:
 
 ## 2. Hızlı kazanımlar (golden set'i beklemez)
 
-- [ ] `CHUNK_OVERLAP` varsayılanını düzelt. Şu an `config.ts` içinde `0`; karakter tabanlı recursive splitter'da bu, cümle/paragraf ortasından kesip bağlamı koparıyor. Bu bir deney konusu değil, hatalı varsayılan — baseline ölçümünden hemen sonra düzeltilir, sonra 4. maddede ince ayarı yapılır.
-- [ ] Reranker aç/kapa ve `rerankFetchK` için A/B koş. Reranker zaten kurulu ve `eval/runner.ts` onu destekliyor; neredeyse bedava bir karşılaştırma.
-- [ ] Her iki değişikliği de 1. maddedeki baseline'a karşı raporla.
+- [x] `CHUNK_OVERLAP` varsayılanını `0` → `150` yap (~%15 of `CHUNK_SIZE`). Düzeltme doğru, **ama etkisi bu corpus'ta ölçülemedi** — aşağıya bak.
+- [x] Reranker aç/kapa A/B koş.
+- [ ] ~~`rerankFetchK` A/B~~ — **ölçülemez**: store'da toplam 3 chunk var, `fetchK>3` tamamen atıl. 3. maddeden sonra tekrar denenecek.
+- [x] Her iki değişikliği de 1. maddedeki baseline'a karşı raporla.
 
 Kabul kriteri: İki ayarın etkisi sayısal olarak kayıtlı; hangisinin kalıcı olduğu baseline karşılaştırmasıyla gerekçelendirilmiş.
+
+### Bulgu: corpus, chunking deneyleri için çok küçük
+
+Corpus dosyalarının üçü de 1000 karakterin altında (691/779/768), `CHUNK_SIZE=1000`. Yani her dosya **tek chunk** oluyor — koşum çıktısı da bunu söylüyor: *"3 chunk(s) from 3 source(s)"*. Hiçbir metin bölünmediği için `CHUNK_OVERLAP`'in bu corpus'ta ölçülebilir etkisi **sıfır**. Varsayılan yine de düzeltildi (bölünme olan gerçek belgelerde doğru davranış), ama faydası **3. madde bitene kadar kanıtlanamaz**.
+
+Aynı sebeple `rerankFetchK` de test edilemez: aday havuzu zaten 3 ile sınırlı.
+
+### Reranker A/B (bge-small embedding, k=3, threshold=0.45, 17 vaka)
+
+| Metrik | Reranker OFF | Reranker ON | Δ |
+|---|---|---|---|
+| P@k | 61.7% | **100.0%** | +38.3 |
+| R@k | 100.0% | 100.0% | – |
+| MRR | 0.950 | **1.000** | +0.050 |
+| **falseRetrievalRate** | **85.7%** | **14.3%** | **−71.4** |
+| falseAnswerRate | 0.0% | 0.0% | – |
+| groundedness | 38.7% | 43.6% | +4.9 |
+| retrieval latency | 18ms | 235ms | **13×** |
+
+**Reranker, 1. maddede bulunan asıl problemi çözüyor.** Cevapsız sorularda eşiği geçen chunk oranı %85.7'den %14.3'e düşüyor. Mekanizma ortalama tutulan chunk sayısında görünüyor:
+
+| | cevaplanabilir | cevapsız |
+|---|---|---|
+| Reranker OFF | 1.90 chunk | 1.71 chunk ← ayırt edemiyor |
+| Reranker ON | 1.00 chunk | 0.14 chunk ← keskin ayrım |
+
+Kosinüs benzerliği alakalı ile alakasızı neredeyse hiç ayırmıyor; cross-encoder ayırıyor.
+
+**Öneri:** reranker açık kullanılsın. Varsayılan `false` kalmalı (GGUF model indirmesi gerektiriyor), ama README/deployment dokümanında önerilen konfigürasyon olarak işaretlensin.
+
+### Bu A/B'den çıkan iki uyarı
+
+1. **`RETRIEVAL_THRESHOLD` iki farklı skor ölçeğine uygulanıyor.** Reranker kapalıyken kosinüs benzerliğine, açıkken cross-encoder'ın olasılık skoruna. `0.45` bu ikisinde aynı şeyi ifade etmiyor, dolayısıyla `falseRetrievalRate` kazancının bir kısmı kalite değil **ölçek artefaktı** olabilir. Reranker moduna göre ayrı eşik (veya skor normalizasyonu) gerekiyor — 4. maddeye eklendi.
+2. **Reranker açıkken cevaplanabilir sorularda ortalama sadece 1.00 chunk tutuluyor** (1.90'dan düşüş). Recall %100 kaldığı için tek kaynaklı sorularda sorun yok, ama **çok kaynaklı soru henüz datasette yok**. Bu davranış 3. maddedeki çok kaynaklı vakalarla tekrar sınanmalı.
 
 ## 3. Değerlendirme setini gerçekçi hâle getirme
 
@@ -60,7 +95,9 @@ Kabul kriteri: Dataset, hem retrieval hem de hallucination/abstention davranış
 
 ## 4. Retrieval kalitesi: embedding, chunking, query
 
+- [ ] **`RETRIEVAL_THRESHOLD`'u skor ölçeğinden bağımsız hâle getir.** Aynı eşik hem kosinüs benzerliğine hem cross-encoder olasılığına uygulanıyor; reranker'ı açmak eşiğin anlamını sessizce değiştiriyor (2. maddedeki A/B'den çıktı). Ya moda göre ayrı eşik, ya skor normalizasyonu.
 - [ ] **Embedding modeli karşılaştırması yap.** Retrieval kalitesinde tek en büyük kaldıraç bu ve repo'da üç sağlayıcı hazır (`gemini`, `ollama`, `llama`). Türkçe/çok dilli içerik hedefleniyorsa çok dilli model karşılaştırması, chunking deneylerinden daha yüksek getirili.
+- [ ] Reranker açıkken cevaplanabilir sorularda tutulan chunk sayısının 1.00'e düşmesini çok kaynaklı vakalarla sına (2. maddeden devreden uyarı).
 - [ ] Karakter yerine token odaklı chunk boyutlarını değerlendirme altyapısına ekle.
 - [ ] Chunk boyutu × overlap ızgarasını eval setinde tara (2. maddedeki düzeltmenin üstüne ince ayar).
 - [ ] Başlık, alt başlık ve bölüm yolunu çıkarıp her chunk metadata'sına koy.
