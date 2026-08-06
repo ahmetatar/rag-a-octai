@@ -37,6 +37,8 @@ async function main(): Promise<void> {
     generateAnswers: process.env.EVAL_GENERATE === 'true',
     reranker,
     fetchK: config.rerankFetchK,
+    // Mirrors production's cut by default; EVAL_THRESHOLD sweeps it without touching the app.
+    threshold: process.env.EVAL_THRESHOLD ? parseFloat(process.env.EVAL_THRESHOLD) : config.retrievalThreshold,
   });
 
   logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
@@ -49,27 +51,50 @@ async function main(): Promise<void> {
  * @param report The evaluation report.
  */
 function printReport(report: EvalReport): void {
-  const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
+  // A dash rather than a zero for an unscored metric: an unanswerable case has no recall,
+  // and printing 0.0% would read as a failure instead of as "not applicable".
+  const pct = (value?: number) => (value === undefined ? '     -' : `${(value * 100).toFixed(1)}%`.padStart(6));
+  const num = (value?: number, digits = 2) => (value === undefined ? '     -' : value.toFixed(digits).padStart(6));
 
-  logger.info(`\nEvaluation (k=${report.k}, ${report.cases.length} cases)`);
-  logger.info('id                     P@k    R@k    RR     hit');
+  const { breakdown } = report;
+  // Width the id column to the longest id present, so adding a long case id does not shift
+  // every other row out of its column.
+  const idWidth = Math.max(2, ...report.cases.map((c) => c.id.length));
+
+  logger.info(`\nEvaluation (k=${report.k}, threshold=${report.threshold}, ${breakdown.total} cases)`);
+  logger.info(`Cases: ${breakdown.answerable} answerable, ${breakdown.unanswerable} unanswerable`);
+  logger.info(`${'id'.padEnd(idWidth)}  ans    P@k    R@k     RR    hit  absOK   gnd`);
   for (const c of report.cases) {
     const row = [
-      c.id.padEnd(22),
-      pct(c.precisionAtK).padStart(6),
-      pct(c.recallAtK).padStart(6),
-      c.reciprocalRank.toFixed(2).padStart(6),
-      String(c.hit).padStart(4),
+      c.id.padEnd(idWidth),
+      (c.answerable ? 'yes' : 'no').padStart(4),
+      pct(c.precisionAtK),
+      pct(c.recallAtK),
+      num(c.reciprocalRank),
+      (c.hit === undefined ? '-' : String(c.hit)).padStart(5),
+      (c.abstentionCorrect === undefined ? '-' : c.abstentionCorrect ? 'ok' : 'FAIL').padStart(6),
+      pct(c.groundedness),
     ].join(' ');
     logger.info(row);
   }
 
   const a = report.aggregate;
-  logger.info('----------------------------------------------');
+  logger.info('------------------------------------------------------------------');
   logger.info(
-    `AGGREGATE               P@k=${pct(a.precisionAtK)}  R@k=${pct(a.recallAtK)}  ` +
-      `MRR=${a.mrr.toFixed(3)}  hitRate=${pct(a.hitRate)}` +
-      (a.keywordCoverage !== undefined ? `  kwCoverage=${pct(a.keywordCoverage)}` : '')
+    `RETRIEVAL (answerable only)  P@k=${pct(a.precisionAtK)}  R@k=${pct(a.recallAtK)}  ` +
+      `MRR=${num(a.mrr, 3)}  hitRate=${pct(a.hitRate)}`
+  );
+  if (breakdown.unanswerable > 0) {
+    logger.info(
+      `ABSTENTION                   accuracy=${pct(a.abstentionAccuracy)}  ` +
+        `falseAnswerRate=${pct(a.falseAnswerRate)}  falseRetrievalRate=${pct(a.falseRetrievalRate)}`
+    );
+  }
+  if (report.generatedAnswers) {
+    logger.info(`ANSWER                       kwCoverage=${pct(a.keywordCoverage)}  groundedness=${pct(a.groundedness)}`);
+  }
+  logger.info(
+    `LATENCY                      retrieval=${num(a.retrievalMs, 0)}ms  generation=${num(a.generationMs, 0)}ms`
   );
 }
 

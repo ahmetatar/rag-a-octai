@@ -214,6 +214,7 @@ curl -X POST \
 ```json
 {
   "response": "Based on the documents, the main topic is...",
+  "abstained": false,
   "sources": [
     {
       "id": "chunk-8f3c...",
@@ -227,8 +228,14 @@ curl -X POST \
 ```
 
 `sources` lists the chunks handed to the model, ordered from the closest match, so an
-answer can be traced back to the documents. When nothing clears the similarity threshold
-the list is empty and the model is asked to say it cannot answer.
+answer can be traced back to the documents.
+
+`abstained` is `true` when the documents did not contain an answer — either nothing cleared
+the similarity threshold, or the model judged the retrieved chunks insufficient. In that case
+`response` is a fixed "could not find an answer" message and `sources` is empty, because an
+abstention cites nothing. Check this flag rather than pattern-matching the response text: it
+is the difference between a grounded miss and an ungrounded guess, and it is what the
+evaluation harness scores as `abstentionAccuracy` and `falseAnswerRate`.
 
 **Errors:** `400` invalid body (missing/empty `query`, `topK` out of range, `threshold`
 outside `[-1, 1]`, query longer than `MAX_QUERY_LENGTH`) · `500` internal error.

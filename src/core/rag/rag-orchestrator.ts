@@ -1,7 +1,7 @@
 import config from '@app/config';
 import { ChromaVectorStore, SearchResult, VectorStore } from './vector-store';
 import { BaseEmbedding, createEmbedding } from './embedding';
-import { LangModelBase, OllamaLangModelRunner, PromptContext } from './llm';
+import { isAbstention, LangModelBase, OllamaLangModelRunner, presentAnswer, PromptContext } from './llm';
 import { createReranker, Reranker } from './reranking';
 import { logger } from '@infrastructure/logging';
 import { observeRetrievalTopScore } from '@infrastructure/observability';
@@ -33,6 +33,12 @@ export interface RagAnswer {
   response: string;
   /** The chunks handed to the language model, ordered from the closest match. */
   sources: RagSource[];
+  /**
+   * True when the model declined to answer because the retrieved context did not contain the
+   * answer. A caller should treat this as "no answer found" rather than as an answer — it is
+   * the difference between a grounded miss and an ungrounded guess.
+   */
+  abstained: boolean;
 }
 
 /**
@@ -112,9 +118,17 @@ export class RagOrchestrator {
       sources: filteredResults,
       maxTokens: maxTokens ?? 512,
     };
-    const response = await this.langModel.generateResponse(promptContext);
+    const rawResponse = await this.langModel.generateResponse(promptContext);
+    const abstained = isAbstention(rawResponse);
 
-    return { response, sources: filteredResults.map(toRagSource) };
+    // An abstention cites nothing: returning sources next to "I could not find an answer"
+    // would invite a caller to treat them as supporting evidence for an answer that was
+    // never given.
+    return {
+      response: presentAnswer(rawResponse),
+      sources: abstained ? [] : filteredResults.map(toRagSource),
+      abstained,
+    };
   }
 
   /**

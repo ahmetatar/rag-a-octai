@@ -30,15 +30,22 @@ export function precisionAtK(retrieved: string[], expected: string[], k: number)
 
 /**
  * Recall@k: the fraction of expected sources that appear anywhere in the top-k.
- * Rewards not missing relevant documents. Returns 1 when nothing was expected (vacuously).
+ * Rewards not missing relevant documents.
+ *
+ * Returns `undefined` when nothing was expected. Recall over an empty relevant set is
+ * mathematically undefined, and the tempting shortcut — scoring it 1 "vacuously" — silently
+ * awards a perfect score to every unanswerable case no matter what junk was retrieved,
+ * inflating the aggregate exactly where the system is most likely to be wrong. Unanswerable
+ * cases are scored by {@link falseRetrievalRate} instead.
+ *
  * @param retrieved Ordered retrieved source names.
  * @param expected Expected (relevant) source names.
  * @param k Cut-off rank.
  */
-export function recallAtK(retrieved: string[], expected: string[], k: number): number {
+export function recallAtK(retrieved: string[], expected: string[], k: number): number | undefined {
   const expectedSet = new Set(expected);
   if (expectedSet.size === 0) {
-    return 1;
+    return undefined;
   }
 
   const topKSources = new Set(retrieved.slice(0, k));
@@ -53,13 +60,15 @@ export function recallAtK(retrieved: string[], expected: string[], k: number): n
 }
 
 /**
- * Hit@k: 1 when at least one expected source is in the top-k, else 0.
+ * Hit@k: 1 when at least one expected source is in the top-k, else 0. Returns `undefined`
+ * when nothing was expected, for the reason given on {@link recallAtK}.
  * @param retrieved Ordered retrieved source names.
  * @param expected Expected (relevant) source names.
  * @param k Cut-off rank.
  */
-export function hitAtK(retrieved: string[], expected: string[], k: number): number {
-  return recallAtK(retrieved, expected, k) > 0 ? 1 : 0;
+export function hitAtK(retrieved: string[], expected: string[], k: number): number | undefined {
+  const recall = recallAtK(retrieved, expected, k);
+  return recall === undefined ? undefined : recall > 0 ? 1 : 0;
 }
 
 /**
@@ -92,6 +101,105 @@ export function keywordCoverage(answer: string, keywords: string[]): number {
 }
 
 /**
+ * Groundedness: the fraction of an answer's word trigrams that also occur in the retrieved
+ * chunks it was given. A deterministic, model-free proxy for "did the answer come from the
+ * sources, or from the model's own memory?".
+ *
+ * Trigrams rather than single words because individual words overlap by chance through
+ * ordinary language ("the", "is", "system"), while a run of three consecutive words rarely
+ * coincides unless the answer is genuinely tracking the source text. This is a proxy, not a
+ * judge: a correct answer phrased entirely in the model's own words scores low, and a fluent
+ * paraphrase of a wrong source scores high. Read it as a relative signal across runs, and
+ * layer an LLM judge on top when an absolute verdict is needed.
+ *
+ * Returns 1 for an answer with no trigrams (too short to assess) so it cannot drag an
+ * aggregate down, and 0 when no sources were provided but an answer was produced — an answer
+ * from nothing is grounded in nothing.
+ *
+ * @param answer The generated answer.
+ * @param sourceTexts The retrieved chunk texts the answer was generated from.
+ * @returns A score in [0, 1].
+ */
+export function groundedness(answer: string, sourceTexts: string[]): number {
+  const answerGrams = trigrams(answer);
+  if (answerGrams.length === 0) {
+    return 1;
+  }
+
+  const sourceGrams = new Set(sourceTexts.flatMap((text) => trigrams(text)));
+  if (sourceGrams.size === 0) {
+    return 0;
+  }
+
+  const supported = answerGrams.filter((gram) => sourceGrams.has(gram)).length;
+  return supported / answerGrams.length;
+}
+
+/**
+ * Abstention accuracy: the fraction of cases where the system's decision to answer or
+ * decline matched what the case called for. Counts BOTH directions — declining an
+ * answerable question is as wrong as answering an unanswerable one — so it cannot be gamed
+ * by a system that refuses everything.
+ *
+ * @param outcomes One entry per case: whether it was answerable and whether the model abstained.
+ * @returns A score in [0, 1]; 1 for an empty list (nothing to get wrong).
+ */
+export function abstentionAccuracy(outcomes: AbstentionOutcome[]): number {
+  if (outcomes.length === 0) {
+    return 1;
+  }
+
+  const correct = outcomes.filter((outcome) => outcome.abstained === !outcome.answerable).length;
+  return correct / outcomes.length;
+}
+
+/**
+ * False-answer rate: of the cases that had NO answer in the corpus, the fraction where the
+ * model answered anyway. This is the hallucination metric — the closer to 0 the better.
+ *
+ * @param outcomes One entry per case.
+ * @returns A score in [0, 1]; 0 when there were no unanswerable cases.
+ */
+export function falseAnswerRate(outcomes: AbstentionOutcome[]): number {
+  const unanswerable = outcomes.filter((outcome) => !outcome.answerable);
+  if (unanswerable.length === 0) {
+    return 0;
+  }
+
+  return unanswerable.filter((outcome) => !outcome.abstained).length / unanswerable.length;
+}
+
+/**
+ * False-retrieval rate: of the cases that had no answer in the corpus, the fraction where
+ * retrieval still surfaced chunks above the threshold. Distinct from
+ * {@link falseAnswerRate} because the two failures have different fixes: false retrieval is
+ * a threshold/embedding problem, a false answer on top of it is a prompting problem.
+ *
+ * @param outcomes One entry per case.
+ * @returns A score in [0, 1]; 0 when there were no unanswerable cases.
+ */
+export function falseRetrievalRate(outcomes: AbstentionOutcome[]): number {
+  const unanswerable = outcomes.filter((outcome) => !outcome.answerable);
+  if (unanswerable.length === 0) {
+    return 0;
+  }
+
+  return unanswerable.filter((outcome) => outcome.retrievedCount > 0).length / unanswerable.length;
+}
+
+/**
+ * What one case did, as far as answering-vs-declining is concerned.
+ */
+export interface AbstentionOutcome {
+  /** Whether the corpus actually contains an answer for this case. */
+  answerable: boolean;
+  /** Whether the model declined to answer. */
+  abstained: boolean;
+  /** How many chunks survived retrieval and thresholding. */
+  retrievedCount: number;
+}
+
+/**
  * Averages a list of numbers, returning 0 for an empty list.
  * @param values The values to average.
  */
@@ -100,4 +208,40 @@ export function mean(values: number[]): number {
     return 0;
   }
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+/**
+ * Averages only the values that are present, ignoring `undefined`. Used for metrics that are
+ * undefined for some cases (retrieval scores on unanswerable cases, answer scores when
+ * generation was off) so those cases neither inflate nor deflate the aggregate.
+ *
+ * @param values The values, some possibly undefined.
+ * @returns The mean of the defined values, or undefined when none are defined.
+ */
+export function meanDefined(values: (number | undefined)[]): number | undefined {
+  const present = values.filter((value): value is number => value !== undefined);
+  return present.length === 0 ? undefined : mean(present);
+}
+
+/**
+ * Splits text into normalised word trigrams. Case, punctuation and runs of whitespace are
+ * discarded so that formatting differences between an answer and its source do not read as
+ * a lack of grounding.
+ *
+ * @param text The text to shingle.
+ * @returns The trigrams, joined by single spaces.
+ */
+function trigrams(text: string): string[] {
+  const words = text
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+    .split(/\s+/)
+    .filter(Boolean);
+
+  const grams: string[] = [];
+  for (let index = 0; index + 2 < words.length; index++) {
+    grams.push(`${words[index]} ${words[index + 1]} ${words[index + 2]}`);
+  }
+
+  return grams;
 }

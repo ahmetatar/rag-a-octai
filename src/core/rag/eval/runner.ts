@@ -6,10 +6,22 @@ import { RecursiveChunker } from '../chunkers';
 import { createEmbedding } from '../embedding';
 import { FileInfo, resolveFileHandler } from '../file-handlers';
 import { RagDataIngestor } from '../ingestion';
-import { OllamaLangModelRunner } from '../llm';
+import { isAbstention, OllamaLangModelRunner } from '../llm';
 import { Reranker } from '../reranking';
 import { ChromaVectorStore, SearchResult, VectorStore } from '../vector-store';
-import { hitAtK, keywordCoverage, mean, precisionAtK, recallAtK, reciprocalRank } from './metrics';
+import {
+  AbstentionOutcome,
+  abstentionAccuracy,
+  falseAnswerRate,
+  falseRetrievalRate,
+  groundedness,
+  hitAtK,
+  keywordCoverage,
+  meanDefined,
+  precisionAtK,
+  recallAtK,
+  reciprocalRank,
+} from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
 /**
@@ -32,6 +44,12 @@ export interface RunEvalOptions {
   reranker?: Reranker;
   /** Candidates to fetch before reranking down to topK (only used with a reranker). */
   fetchK?: number;
+  /**
+   * Minimum score a chunk must reach to be kept, mirroring the orchestrator. Without it the
+   * eval scores chunks production would have discarded, so its numbers describe a pipeline
+   * that does not exist. Defaults to the configured retrieval threshold.
+   */
+  threshold?: number;
 }
 
 /** Maps a file extension to a MIME type the handlers understand. */
@@ -62,12 +80,33 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
     ? new OllamaLangModelRunner(config.generationModel, config.ollamaHost)
     : undefined;
 
+  const threshold = options.threshold ?? config.retrievalThreshold;
   const results: EvalCaseResult[] = [];
   for (const evalCase of cases) {
-    results.push(await scoreCase(evalCase, options, embedding, store, langModel));
+    results.push(await scoreCase(evalCase, options, threshold, embedding, store, langModel));
   }
 
-  return { k: options.topK, generatedAnswers: options.generateAnswers, cases: results, aggregate: aggregate(results) };
+  return {
+    k: options.topK,
+    threshold,
+    generatedAnswers: options.generateAnswers,
+    breakdown: {
+      total: results.length,
+      answerable: results.filter((result) => result.answerable).length,
+      unanswerable: results.filter((result) => !result.answerable).length,
+    },
+    cases: results,
+    aggregate: aggregate(results),
+  };
+}
+
+/**
+ * Whether a case's answer exists in the corpus. Explicit `expectedAnswerable` wins; otherwise
+ * a case with no expected sources is taken to be unanswerable.
+ * @param evalCase The case.
+ */
+export function isAnswerable(evalCase: EvalCase): boolean {
+  return evalCase.expectedAnswerable ?? evalCase.expectedSources.length > 0;
 }
 
 /**
@@ -104,32 +143,60 @@ async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnTy
 async function scoreCase(
   evalCase: EvalCase,
   options: RunEvalOptions,
+  threshold: number,
   embedding: Awaited<ReturnType<typeof createEmbedding>>,
   store: VectorStore,
   langModel?: OllamaLangModelRunner
 ): Promise<EvalCaseResult> {
+  const answerable = isAnswerable(evalCase);
+  const retrievalStart = performance.now();
+
   const [queryVector] = await embedding.embed([evalCase.question]);
   // Mirror the orchestrator: with a reranker, fetch a wider pool, rerank, then cut to topK.
   const fetchK = options.reranker ? Math.max(options.topK, options.fetchK ?? options.topK) : options.topK;
   const candidates = await store.search(queryVector, fetchK, options.tenantId);
-  const results = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
+  const ranked = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
+  // Same cut production applies, so the eval scores the chunks the model would really see.
+  const results = ranked.filter((result) => result.score >= threshold);
+
+  const retrievalMs = performance.now() - retrievalStart;
   const retrievedSources = results.map((result) => String(result.metadata?.source ?? ''));
 
   const result: EvalCaseResult = {
     id: evalCase.id,
     question: evalCase.question,
+    answerable,
     retrievedSources,
-    precisionAtK: precisionAtK(retrievedSources, evalCase.expectedSources, options.topK),
-    recallAtK: recallAtK(retrievedSources, evalCase.expectedSources, options.topK),
-    reciprocalRank: reciprocalRank(retrievedSources, evalCase.expectedSources),
-    hit: hitAtK(retrievedSources, evalCase.expectedSources, options.topK),
+    retrievalMs,
   };
+
+  // Retrieval metrics need a relevant set to score against; an unanswerable case has none,
+  // so it is left unscored here and counted by the false-retrieval rate instead.
+  if (answerable) {
+    result.precisionAtK = precisionAtK(retrievedSources, evalCase.expectedSources, options.topK);
+    result.recallAtK = recallAtK(retrievedSources, evalCase.expectedSources, options.topK);
+    result.reciprocalRank = reciprocalRank(retrievedSources, evalCase.expectedSources);
+    result.hit = hitAtK(retrievedSources, evalCase.expectedSources, options.topK);
+  }
 
   if (langModel) {
     try {
+      const generationStart = performance.now();
       const answer = await langModel.generateResponse({ question: evalCase.question, sources: results, maxTokens: config.maxTokens });
+      result.generationMs = performance.now() - generationStart;
       result.answer = answer;
-      result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
+
+      const abstained = isAbstention(answer);
+      result.abstained = abstained;
+      result.abstentionCorrect = abstained === !answerable;
+
+      // Keyword coverage and groundedness describe the CONTENT of an answer. An abstention
+      // has no content to score, and scoring it would punish a correct refusal for not
+      // containing the keywords it was right to omit.
+      if (!abstained) {
+        result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
+        result.groundedness = groundedness(answer, results.map((source) => source.content));
+      }
     } catch (error) {
       logger.warn(`Generation failed for case ${evalCase.id}: ${error instanceof Error ? error.message : error}`);
     }
@@ -173,19 +240,53 @@ export async function loadDataset(datasetPath: string): Promise<EvalCase[]> {
 }
 
 /**
- * Aggregates per-case results into means. Keyword coverage is averaged only over cases that
- * produced an answer.
+ * Aggregates per-case results. Every mean ignores cases where the metric is undefined, so
+ * retrieval scores cover the answerable cases and answer scores cover the answered ones —
+ * a case is never counted as a success at something it was never scored on.
+ *
  * @param results The per-case results.
  * @returns The aggregate scores.
  */
 function aggregate(results: EvalCaseResult[]): EvalAggregate {
-  const withCoverage = results.filter((result) => result.keywordCoverage !== undefined);
+  // Abstention is only meaningful for cases that actually produced an answer; a case whose
+  // generation failed (or was disabled) has made no decision to judge.
+  const outcomes: AbstentionOutcome[] = results
+    .filter((result) => result.abstained !== undefined)
+    .map((result) => ({
+      answerable: result.answerable,
+      abstained: result.abstained!,
+      retrievedCount: result.retrievedSources.length,
+    }));
 
   return {
-    precisionAtK: mean(results.map((result) => result.precisionAtK)),
-    recallAtK: mean(results.map((result) => result.recallAtK)),
-    mrr: mean(results.map((result) => result.reciprocalRank)),
-    hitRate: mean(results.map((result) => result.hit)),
-    keywordCoverage: withCoverage.length ? mean(withCoverage.map((result) => result.keywordCoverage!)) : undefined,
+    precisionAtK: meanDefined(results.map((result) => result.precisionAtK)),
+    recallAtK: meanDefined(results.map((result) => result.recallAtK)),
+    mrr: meanDefined(results.map((result) => result.reciprocalRank)),
+    hitRate: meanDefined(results.map((result) => result.hit)),
+    keywordCoverage: meanDefined(results.map((result) => result.keywordCoverage)),
+    groundedness: meanDefined(results.map((result) => result.groundedness)),
+    abstentionAccuracy: outcomes.length ? abstentionAccuracy(outcomes) : undefined,
+    falseAnswerRate: outcomes.length ? falseAnswerRate(outcomes) : undefined,
+    falseRetrievalRate: hasUnanswerable(results) ? falseRetrievalRate(retrievalOutcomes(results)) : undefined,
+    retrievalMs: meanDefined(results.map((result) => result.retrievalMs)),
+    generationMs: meanDefined(results.map((result) => result.generationMs)),
   };
+}
+
+/** Whether the dataset contained any case the corpus cannot answer. */
+function hasUnanswerable(results: EvalCaseResult[]): boolean {
+  return results.some((result) => !result.answerable);
+}
+
+/**
+ * Abstention outcomes for the false-RETRIEVAL rate, which is a retrieval-only measure and so
+ * covers every case — including ones where generation was disabled or failed.
+ * @param results The per-case results.
+ */
+function retrievalOutcomes(results: EvalCaseResult[]): AbstentionOutcome[] {
+  return results.map((result) => ({
+    answerable: result.answerable,
+    abstained: result.abstained ?? false,
+    retrievedCount: result.retrievedSources.length,
+  }));
 }

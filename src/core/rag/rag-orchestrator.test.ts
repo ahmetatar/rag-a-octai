@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { RagOrchestrator } from './rag-orchestrator';
 import { BaseEmbedding } from './embedding';
-import { LangModelBase, PromptContext } from './llm';
+import { ABSTENTION_MESSAGE, LangModelBase, NO_ANSWER_SENTINEL, PromptContext } from './llm';
 import { Reranker } from './reranking';
 import { SearchResult } from './vector-store';
 
@@ -11,13 +11,21 @@ class StubEmbedding extends BaseEmbedding {
   }
 }
 
-/** Records the prompt it was given so tests can assert what the model actually received. */
+/**
+ * Records the prompt it was given so tests can assert what the model actually received.
+ * Mirrors the real contract: with no context it emits the abstention sentinel. `scripted`
+ * overrides the reply so a test can stage an abstention despite context being present.
+ */
 class RecordingLangModel extends LangModelBase {
   lastPrompt?: PromptContext;
+  scripted?: string;
 
   async generateResponse(promptCtx: PromptContext): Promise<string> {
     this.lastPrompt = promptCtx;
-    return this.buildContext(promptCtx) ? 'answer from context' : 'I cannot answer that';
+    if (this.scripted !== undefined) {
+      return this.scripted;
+    }
+    return this.buildContext(promptCtx) ? 'answer from context' : NO_ANSWER_SENTINEL;
   }
 }
 
@@ -110,14 +118,48 @@ describe('RagOrchestrator.query', () => {
     expect(source.page).toBeUndefined();
   });
 
-  it('still answers when nothing clears the threshold, without any sources', async () => {
+  it('abstains when nothing clears the threshold, without any sources', async () => {
     const { orchestrator, langModel } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH]);
 
     const answer = await orchestrator.query('unrelated question?', 3, 0.99);
 
     expect(answer.sources).toEqual([]);
-    expect(answer.response).toBe('I cannot answer that');
+    expect(answer.abstained).toBe(true);
+    expect(answer.response).toBe(ABSTENTION_MESSAGE);
     expect(langModel.lastPrompt?.sources).toEqual([]);
+  });
+
+  // Retrieval finding chunks does not mean they answer the question. When the model says
+  // they do not, the result must not look like a sourced answer.
+  it('reports an abstention and drops the sources even when chunks were retrieved', async () => {
+    const { orchestrator, langModel } = orchestratorOver([CLOSE_MATCH]);
+    langModel.scripted = NO_ANSWER_SENTINEL;
+
+    const answer = await orchestrator.query('question the chunks do not cover?', 3, 0.5);
+
+    expect(answer.abstained).toBe(true);
+    expect(answer.sources).toEqual([]);
+    expect(answer.response).toBe(ABSTENTION_MESSAGE);
+    // The model was still given the chunks; it judged them insufficient.
+    expect(langModel.lastPrompt?.sources).toHaveLength(1);
+  });
+
+  it('never leaks the internal sentinel to a caller', async () => {
+    const { orchestrator, langModel } = orchestratorOver([CLOSE_MATCH]);
+    langModel.scripted = '**NO_ANSWER**';
+
+    const answer = await orchestrator.query('question?', 3, 0.5);
+
+    expect(answer.response).not.toContain(NO_ANSWER_SENTINEL);
+  });
+
+  it('marks a real answer as not abstained and keeps its sources', async () => {
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH]);
+
+    const answer = await orchestrator.query('question?', 3, 0.5);
+
+    expect(answer.abstained).toBe(false);
+    expect(answer.sources).toHaveLength(1);
   });
 
   it('treats a missing threshold as "keep everything"', async () => {
