@@ -33,6 +33,7 @@ async function main(): Promise<void> {
     datasetPath: path.join(EVAL_DIR, 'dataset.jsonl'),
     collection: process.env.EVAL_COLLECTION || 'eval_harness',
     topK: config.topK,
+    threshold: config.retrievalThreshold,
     tenantId: 'eval',
     generateAnswers: process.env.EVAL_GENERATE === 'true',
     reranker,
@@ -51,7 +52,7 @@ async function main(): Promise<void> {
 function printReport(report: EvalReport): void {
   const pct = (value: number) => `${(value * 100).toFixed(1)}%`;
 
-  logger.info(`\nEvaluation (k=${report.k}, ${report.cases.length} cases)`);
+  logger.info(`\nEvaluation (k=${report.k}, threshold=${config.retrievalThreshold}, ${report.cases.length} cases)`);
   logger.info('id                     P@k    R@k    RR     hit');
   for (const c of report.cases) {
     const row = [
@@ -65,11 +66,15 @@ function printReport(report: EvalReport): void {
   }
 
   const a = report.aggregate;
+  logger.info(`Answerable=${a.answerableCases}  Unanswerable=${a.unanswerableCases}`);
   logger.info('----------------------------------------------');
   logger.info(
     `AGGREGATE               P@k=${pct(a.precisionAtK)}  R@k=${pct(a.recallAtK)}  ` +
       `MRR=${a.mrr.toFixed(3)}  hitRate=${pct(a.hitRate)}` +
-      (a.keywordCoverage !== undefined ? `  kwCoverage=${pct(a.keywordCoverage)}` : '')
+      (a.keywordCoverage !== undefined ? `  kwCoverage=${pct(a.keywordCoverage)}` : '') +
+      (a.falseRetrievalRate !== undefined ? `  falseRetrieval=${pct(a.falseRetrievalRate)}` : '') +
+      (a.abstentionAccuracy !== undefined ? `  abstention=${pct(a.abstentionAccuracy)}` : '') +
+      (a.falseAnswerRate !== undefined ? `  falseAnswer=${pct(a.falseAnswerRate)}` : '')
   );
 }
 

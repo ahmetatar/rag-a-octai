@@ -182,13 +182,26 @@ next run.
 Append lines to `eval/dataset.jsonl` (one JSON object per line):
 
 ```json
-{"id": "my-question", "question": "What ...?", "expectedSources": ["my-doc.txt"], "expectedKeywords": ["fact1", "fact2"]}
+{"id": "my-question", "question": "What ...?", "expectedAnswerable": true, "expectedSources": ["my-doc.txt"], "expectedKeywords": ["fact1", "fact2"]}
 ```
 
+- `expectedAnswerable` — whether the corpus contains enough information to answer. It must
+  be `false` for a deliberately unanswerable case.
 - `expectedSources` — the file name(s) whose chunks should be retrieved. Drives the retrieval
   metrics.
 - `expectedKeywords` — optional; key facts the generated answer should contain. Drives
   keyword coverage (only scored when answer generation is on, see below).
+
+To evaluate a safe refusal, add an unanswerable case. It must have no expected source:
+
+```json
+{"id": "outside-corpus", "question": "What is the 2027 price?", "expectedAnswerable": false, "expectedRefusal": true, "expectedSources": []}
+```
+
+Such cases do not affect retrieval precision, recall, or MRR. Instead the report measures
+`falseRetrieval` (a source survived the production threshold), and with `EVAL_GENERATE=true`,
+`abstention` and `falseAnswer`. Refusal detection uses deterministic English/Turkish phrases;
+it is intended for repeatable regression testing, not as a semantic LLM judge.
 
 ### Score generated answers too
 
@@ -219,6 +232,7 @@ retrieval metrics.
 | `EVAL_COLLECTION` | ChromaDB collection the harness uses | `eval_harness` |
 | `EVAL_GENERATE` | Also generate answers and score keyword coverage | `false` |
 | `RAG_TOP_K` | Final number of chunks kept (`k` in the metrics) | `3` |
+| `RETRIEVAL_THRESHOLD` | Minimum score retained by eval, matching production queries | `0.35` |
 
 ## Part 5 — Where the code lives
 
