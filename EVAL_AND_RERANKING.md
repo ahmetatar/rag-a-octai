@@ -233,6 +233,12 @@ retrieval metrics.
 | `EVAL_GENERATE` | Also generate answers and score keyword coverage | `false` |
 | `RAG_TOP_K` | Final number of chunks kept (`k` in the metrics) | `3` |
 | `RETRIEVAL_THRESHOLD` | Minimum score retained by eval, matching production queries | `0.35` |
+| `EVAL_MIN_MRR` | Optional CI minimum MRR; a lower result exits non-zero | – |
+| `EVAL_MIN_HIT_RATE` | Optional CI minimum hit rate; a lower result exits non-zero | – |
+
+The golden set records source and conceptual section, not chunk IDs. Recursive chunk IDs can
+change when the chunking policy changes; source/section evidence remains stable. Chunk-level
+assertions will be added after the chunking strategy is formalised.
 
 ## Part 5 — Where the code lives
 

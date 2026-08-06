@@ -1,0 +1,39 @@
+name: Evaluation
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  golden-set:
+    runs-on: ubuntu-latest
+    services:
+      chromadb:
+        image: chromadb/chroma:latest
+        ports:
+          - 8000:8000
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/api/v2/heartbeat"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build && npm test -- --run
+      - name: Start local embedding model
+        run: |
+          docker run -d --name ollama -p 11434:11434 ollama/ollama:latest
+          until curl --fail http://localhost:11434/api/version; do sleep 2; done
+          docker exec ollama ollama pull nomic-embed-text
+      - name: Run retrieval quality gate
+        env:
+          EMBEDDING_PROVIDER: ollama
+          EMBEDDING_MODEL: nomic-embed-text
+          CHROMADB_HOST: localhost
+          CHROMADB_PORT: 8000
+          EVAL_MIN_MRR: '0.80'
+          EVAL_MIN_HIT_RATE: '0.80'
+        run: npm run eval

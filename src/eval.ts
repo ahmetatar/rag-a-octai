@@ -43,6 +43,7 @@ async function main(): Promise<void> {
   logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
   printReport(report);
   await writeReport(report);
+  enforceQualityGates(report);
 }
 
 /**
@@ -87,6 +88,19 @@ async function writeReport(report: EvalReport): Promise<void> {
   const target = path.join(RESULTS_DIR, 'latest.json');
   await fs.writeFile(target, JSON.stringify(report, null, 2));
   logger.info(`\nReport written to ${target}`);
+}
+
+/** Fails CI when explicitly configured minimum aggregate scores regress. */
+function enforceQualityGates(report: EvalReport): void {
+  const gates: Array<[string, number, number]> = [
+    ['MRR', report.aggregate.mrr, Number(process.env.EVAL_MIN_MRR)] as [string, number, number],
+    ['hit rate', report.aggregate.hitRate, Number(process.env.EVAL_MIN_HIT_RATE)] as [string, number, number],
+  ].filter(([, , minimum]) => Number.isFinite(minimum));
+
+  const failures = gates.filter(([, actual, minimum]) => actual < minimum);
+  if (failures.length) {
+    throw new Error(`Evaluation quality gate failed: ${failures.map(([name, actual, minimum]) => `${name}=${actual.toFixed(3)} < ${minimum.toFixed(3)}`).join(', ')}`);
+  }
 }
 
 main().catch((error) => {
