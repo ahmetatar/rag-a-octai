@@ -28,12 +28,12 @@ Kabul kriteri: Dataset, hem retrieval hem de hallucination/abstention davranış
 
 ## 3. Chunking ve bağlam koruma
 
-- [ ] Varsayılan `CHUNK_OVERLAP=0` değerini deneysel olarak optimize et.
-- [ ] Karakter yerine token odaklı chunk boyutlarını değerlendirme altyapısına ekle.
-- [ ] Başlık, alt başlık ve bölüm yolunu çıkarıp her chunk metadata’sına koy.
-- [ ] Chunk metnine gerektiğinde bölüm bağlamı ekle.
-- [ ] PDF’lerde sayfa bazlı bölme ile genel PDF handler kullanımını netleştir.
-- [ ] Farklı chunk stratejilerini eval sonuçlarıyla karşılaştır.
+- [x] Varsayılan `CHUNK_OVERLAP=0` değerini deneysel olarak optimize et.
+- [x] Karakter yerine token odaklı chunk boyutlarını değerlendirme altyapısına ekle.
+- [x] Başlık, alt başlık ve bölüm yolunu çıkarıp her chunk metadata’sına koy.
+- [x] Chunk metnine gerektiğinde bölüm bağlamı ekle.
+- [x] PDF’lerde sayfa bazlı bölme ile genel PDF handler kullanımını netleştir.
+- [x] Farklı chunk stratejilerini eval sonuçlarıyla karşılaştır.
 
 Kabul kriteri: En iyi strateji eval setinde baseline’a göre retrieval metriklerini korur veya iyileştirir; chunk tek başına okunabilir kalır.
 
