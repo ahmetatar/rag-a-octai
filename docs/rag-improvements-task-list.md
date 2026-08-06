@@ -4,13 +4,13 @@ Aşağıdaki sırayla ilerlemeyi öneriyorum. Önce ölçüm altyapısını gü�
 
 ## 1. Eval altyapısı ve cevapsızlık
 
-- [ ] Eval veri şemasına `expectedAnswerable` ve gerekirse `expectedRefusal` alanlarını ekle.
-- [ ] `expectedSources: []` olan vakaların mevcut metriklerde yanlışlıkla başarılı sayılmasını düzelt.
-- [ ] Eval koşumunda production’daki `threshold` filtrelemesini de uygula.
-- [ ] `abstentionAccuracy`, `falseAnswerRate` ve `falseRetrievalRate` metriklerini ekle.
-- [ ] Yanıtın reddetme davranışını ölç: kaynak boşken uydurma yerine güvenli cevap vermeli.
-- [ ] Yeni metrikler ve boş kaynak vakaları için unit test yaz.
-- [ ] Eval raporuna cevaplanabilir/cevapsız vaka dağılımını ve yeni metrikleri ekle.
+- [x] Eval veri şemasına `expectedAnswerable` ve gerekirse `expectedRefusal` alanlarını ekle.
+- [x] `expectedSources: []` olan vakaların mevcut metriklerde yanlışlıkla başarılı sayılmasını düzelt.
+- [x] Eval koşumunda production’daki `threshold` filtrelemesini de uygula.
+- [x] `abstentionAccuracy`, `falseAnswerRate` ve `falseRetrievalRate` metriklerini ekle.
+- [x] Yanıtın reddetme davranışını ölç: kaynak boşken uydurma yerine güvenli cevap vermeli.
+- [x] Yeni metrikler ve boş kaynak vakaları için unit test yaz.
+- [x] Eval raporuna cevaplanabilir/cevapsız vaka dağılımını ve yeni metrikleri ekle.
 
 Kabul kriteri: Cevapsız vaka, doğru reddedildiğinde başarılı; alakasız kaynak veya uydurulmuş yanıt üretildiğinde başarısız sayılır.
 
