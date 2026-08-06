@@ -16,13 +16,13 @@ Kabul kriteri: Cevapsız vaka, doğru reddedildiğinde başarılı; alakasız ka
 
 ## 2. Değerlendirme setini gerçekçi hâle getirme
 
-- [x] Mevcut 10 soruyu koruyup daha geniş, alan-özel bir golden set oluştur.
-- [x] Her belge için doğrudan, dolaylı ve benzer-konulu distractor sorular ekle.
-- [x] Cevapsız sorular ekle: tamamen kapsam dışı ve corpus’a yakın ama cevabı olmayan sorular.
-- [x] Çok kaynaklı cevap gerektiren vakalar ekle.
-- [x] Beklenen kaynaklara ek olarak beklenen bölüm/chunk kimliği tanımlama ihtiyacını değerlendir.
-- [x] Her vaka için beklenen anahtar bilgiler, kaynak ve gerekçe kaydı tut.
-- [x] Eval’i CI’da çalışacak şekilde temel kalite eşiğiyle bağla.
+- [ ] Mevcut 10 soruyu koruyup daha geniş, alan-özel bir golden set oluştur.
+- [ ] Her belge için doğrudan, dolaylı ve benzer-konulu distractor sorular ekle.
+- [ ] Cevapsız sorular ekle: tamamen kapsam dışı ve corpus’a yakın ama cevabı olmayan sorular.
+- [ ] Çok kaynaklı cevap gerektiren vakalar ekle.
+- [ ] Beklenen kaynaklara ek olarak beklenen bölüm/chunk kimliği tanımlama ihtiyacını değerlendir.
+- [ ] Her vaka için beklenen anahtar bilgiler, kaynak ve gerekçe kaydı tut.
+- [ ] Eval’i CI’da çalışacak şekilde temel kalite eşiğiyle bağla.
 
 Kabul kriteri: Dataset, hem retrieval hem de hallucination/abstention davranışını temsil eder; değişikliklerde metrik gerilemesi görünür olur.
 
