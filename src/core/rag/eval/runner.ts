@@ -21,6 +21,7 @@ import {
   precisionAtK,
   recallAtK,
   reciprocalRank,
+  snippetCoverage,
 } from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
@@ -94,9 +95,11 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
       total: results.length,
       answerable: results.filter((result) => result.answerable).length,
       unanswerable: results.filter((result) => !result.answerable).length,
+      byTag: countByTag(results),
     },
     cases: results,
     aggregate: aggregate(results),
+    byTag: aggregateByTag(results),
   };
 }
 
@@ -166,9 +169,17 @@ async function scoreCase(
     id: evalCase.id,
     question: evalCase.question,
     answerable,
+    tags: evalCase.tags,
     retrievedSources,
     retrievalMs,
   };
+
+  // Passage-level retrieval: scored for every case, answerable or not. An unanswerable case
+  // declares no snippets, so it simply stays undefined rather than needing a special branch.
+  result.snippetCoverage = snippetCoverage(
+    results.map((source) => source.content),
+    evalCase.expectedSnippets ?? []
+  );
 
   // Retrieval metrics need a relevant set to score against; an unanswerable case has none,
   // so it is left unscored here and counted by the false-retrieval rate instead.
@@ -263,6 +274,7 @@ function aggregate(results: EvalCaseResult[]): EvalAggregate {
     recallAtK: meanDefined(results.map((result) => result.recallAtK)),
     mrr: meanDefined(results.map((result) => result.reciprocalRank)),
     hitRate: meanDefined(results.map((result) => result.hit)),
+    snippetCoverage: meanDefined(results.map((result) => result.snippetCoverage)),
     keywordCoverage: meanDefined(results.map((result) => result.keywordCoverage)),
     groundedness: meanDefined(results.map((result) => result.groundedness)),
     abstentionAccuracy: outcomes.length ? abstentionAccuracy(outcomes) : undefined,
@@ -271,6 +283,39 @@ function aggregate(results: EvalCaseResult[]): EvalAggregate {
     retrievalMs: meanDefined(results.map((result) => result.retrievalMs)),
     generationMs: meanDefined(results.map((result) => result.generationMs)),
   };
+}
+
+/**
+ * Counts how many cases carry each tag. A case with several tags counts once under each, so
+ * the counts deliberately do not sum to the case total.
+ * @param results The per-case results.
+ */
+function countByTag(results: EvalCaseResult[]): Record<string, number> {
+  const counts: Record<string, number> = {};
+  for (const result of results) {
+    for (const tag of result.tags ?? []) {
+      counts[tag] = (counts[tag] ?? 0) + 1;
+    }
+  }
+
+  return counts;
+}
+
+/**
+ * Aggregates the cases carrying each tag separately. The whole-set mean can stay flat while
+ * one class of question — multi-source, distractors — regresses badly; this is what makes
+ * that visible.
+ *
+ * @param results The per-case results.
+ * @returns Tag name to the aggregate over the cases carrying it.
+ */
+function aggregateByTag(results: EvalCaseResult[]): Record<string, EvalAggregate> {
+  const byTag: Record<string, EvalAggregate> = {};
+  for (const tag of Object.keys(countByTag(results)).sort()) {
+    byTag[tag] = aggregate(results.filter((result) => (result.tags ?? []).includes(tag)));
+  }
+
+  return byTag;
 }
 
 /** Whether the dataset contained any case the corpus cannot answer. */

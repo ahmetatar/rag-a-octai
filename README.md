@@ -9,7 +9,8 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 - 🔍 **Semantic Search** - Vector retrieval behind a pluggable `VectorStore` interface
   (ChromaDB today, cosine space; see [ADR 0001](docs/adr/0001-vector-store-abstraction-and-backend-strategy.md))
 - 🎯 **Cross-Encoder Reranking** - Optional local reranker that reorders candidates by true
-  relevance (measured MRR 0.95 → 1.0). See [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
+  relevance (measured: precision 56% → 89%, at a cost in recall). See
+  [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 - 🤖 **AI-Powered Responses** - Ollama, local llama.cpp, or Gemini; answers include cited sources
 - ⚡ **Async Ingestion** - Non-blocking uploads via a BullMQ + Redis job queue (`202` + job id)
 - 🛡️ **Multi-Tenant + Auth** - API-key auth with per-tenant document isolation
@@ -18,7 +19,8 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 - 🧱 **Resilient** - Timeouts + retry/backoff on every external call
 - 🛰️ **Observability** - Prometheus `/metrics`, a dependency readiness probe, and a correlation
   id on every request/log
-- 📊 **Evaluation Harness** - `npm run eval` scores retrieval quality; repeatable, diffable
+- 📊 **Evaluation Harness** - `npm run eval` scores retrieval and answer quality against a
+  66-case golden set over a deliberately fictional corpus; gated in CI
 - 🧩 **Modular Architecture** - Extensible handlers, chunkers, embedding/rerank providers
 - 🐳 **Docker Support** - Compose stack (API + ChromaDB + Redis)
 
@@ -360,22 +362,32 @@ npm run eval
 RERANK_ENABLED=true RERANK_MODEL_PATH=./models/<reranker>.gguf npm run eval
 ```
 
-**Reranking is recommended in production.** It defaults to off only because it needs a GGUF
-model on disk. Measured on the shipped eval set (bge-small embeddings, k=3, threshold 0.45):
+**Reranking is a trade, not a free win.** It defaults to off because it needs a GGUF model on
+disk *and* because it costs recall. Measured on the shipped 66-case eval set (bge-small
+embeddings, k=3, threshold 0.45):
 
 | Metric | Reranker off | Reranker on |
 |---|---|---|
-| precision@k | 61.7% | **100.0%** |
-| MRR | 0.950 | **1.000** |
-| false retrieval rate | 85.7% | **14.3%** |
-| retrieval latency | 18 ms | 235 ms |
+| precision@k | 56.2% | **89.2%** |
+| recall@k | **98.0%** | 91.2% |
+| hit rate | **100.0%** | 92.2% |
+| snippet coverage | **98.0%** | 89.2% |
+| false retrieval rate | 100.0% | **13.3%** |
+| retrieval latency | **17 ms** | 1439 ms |
 
-The last two are the trade: the cross-encoder stops questions the corpus cannot answer from
-pulling back on-topic-but-irrelevant chunks, and costs roughly 13× the retrieval latency to do
-it (still small next to generation, which is ~2 s). Note that `RETRIEVAL_THRESHOLD` is applied
-to whichever score is current — cosine similarity without a reranker, the cross-encoder's
-relevance score with one — so the same number is not equally strict in both modes. Re-tune it
-when you switch.
+The cross-encoder stops questions the corpus cannot answer from pulling back
+on-topic-but-irrelevant chunks — false retrieval drops from 100% to 13%. But it keeps only 1.14
+chunks per answerable question (down from 2.92), so it also discards correct documents:
+multi-document questions lose 10 points of recall. Enable it if unanswerable queries dominate
+your traffic; tune `RETRIEVAL_THRESHOLD` first if multi-document answers matter.
+
+Note that `RETRIEVAL_THRESHOLD` is applied to whichever score is current — cosine similarity
+without a reranker, the cross-encoder's relevance score with one — so the same number is not
+equally strict in both modes. Re-tune it when you switch.
+
+The eval also runs in CI: `ci.yml` fails a pull request when the deterministic retrieval
+metrics fall below `eval/gates.json`, while the full run including generation is nightly and
+non-gating (generation is non-deterministic, so gating it would fail builds on noise).
 
 👉 **Full guide with a step-by-step walkthrough:** [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 

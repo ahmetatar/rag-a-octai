@@ -1,3 +1,5 @@
+import { ExpectedKeyword } from './metrics';
+
 /**
  * One evaluation case: a question and what a correct system should retrieve/answer.
  */
@@ -11,8 +13,21 @@ export interface EvalCase {
    * corpus cannot answer.
    */
   expectedSources: string[];
-  /** Key facts the generated answer should mention (optional; enables answer scoring). */
-  expectedKeywords?: string[];
+  /**
+   * Key facts the generated answer should mention (optional; enables answer scoring). An
+   * entry may be an array of accepted spellings of the same fact — see
+   * {@link ExpectedKeyword}.
+   */
+  expectedKeywords?: ExpectedKeyword[];
+  /**
+   * Verbatim phrases from the corpus that correct retrieval must surface. Scores retrieval at
+   * PASSAGE level, one step below `expectedSources`: the right file can come back while the
+   * chunk carrying the answer does not.
+   *
+   * Phrases rather than chunk ids on purpose — a chunk id is invalidated by every chunk-size
+   * or overlap change, which are the very knobs the eval exists to sweep.
+   */
+  expectedSnippets?: string[];
   /**
    * Whether the corpus contains an answer at all. Defaults to `expectedSources.length > 0`
    * when omitted, so existing datasets keep working; set it explicitly to describe a case
@@ -24,6 +39,18 @@ export interface EvalCase {
    * not scored.
    */
   expectedRefusal?: string;
+  /**
+   * Labels describing what the case exercises (`direct`, `indirect`, `distractor`,
+   * `multi-source`, `unanswerable`, `regression`, …). Not scored on their own; the report
+   * aggregates per tag so a regression confined to one case class stays visible instead of
+   * being averaged away by the rest of the set.
+   */
+  tags?: string[];
+  /**
+   * Why this case exists and where its answer comes from, in a sentence. Documentation only —
+   * it is what makes a disputed answer key settleable months later.
+   */
+  rationale?: string;
 }
 
 /**
@@ -34,6 +61,8 @@ export interface EvalCaseResult {
   question: string;
   /** Whether the corpus was expected to be able to answer this case. */
   answerable: boolean;
+  /** The case's tags, carried through so the report can aggregate per tag. */
+  tags?: string[];
   /** Source names retrieved and kept after thresholding, in rank order. */
   retrievedSources: string[];
   /**
@@ -44,6 +73,11 @@ export interface EvalCaseResult {
   recallAtK?: number;
   reciprocalRank?: number;
   hit?: number;
+  /**
+   * Fraction of the case's expected snippets found in the retrieved chunk texts. Undefined
+   * when the case declares no snippets. Retrieval-only — needs no generation.
+   */
+  snippetCoverage?: number;
   /** Present only when answers were generated. */
   keywordCoverage?: number;
   /** Fraction of the answer's trigrams found in the retrieved chunks; generation only. */
@@ -69,6 +103,8 @@ export interface EvalAggregate {
   recallAtK?: number;
   mrr?: number;
   hitRate?: number;
+  /** Mean snippet coverage over the cases that declared snippets. */
+  snippetCoverage?: number;
   keywordCoverage?: number;
   /** Mean groundedness over answered (non-abstained) cases. */
   groundedness?: number;
@@ -91,6 +127,8 @@ export interface EvalCaseBreakdown {
   total: number;
   answerable: number;
   unanswerable: number;
+  /** How many cases carry each tag, so the reader can size every per-tag aggregate. */
+  byTag: Record<string, number>;
 }
 
 /**
@@ -107,4 +145,10 @@ export interface EvalReport {
   breakdown: EvalCaseBreakdown;
   cases: EvalCaseResult[];
   aggregate: EvalAggregate;
+  /**
+   * Aggregates restricted to the cases carrying each tag. A whole-set mean hides a
+   * regression that only hits one class of question (say, multi-source); this is where it
+   * shows up.
+   */
+  byTag: Record<string, EvalAggregate>;
 }

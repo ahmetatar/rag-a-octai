@@ -1,0 +1,49 @@
+ADR-0007: Replace the Ferrite storage engine with Halyard
+Meridian Systems - Corvus Platform - Status: Accepted, 2031-08-22
+Deciders: Corvus platform team, with sign-off from the Meridian architecture council
+
+Context
+
+Corvus originally stored ingested events in Ferrite, a log-structured merge tree written for
+the first version of the platform. Ferrite compacted continuously, which meant that write
+amplification grew with retention: a Platinum tenant holding 400 days of data paid for the
+same bytes to be rewritten roughly eleven times over the life of a segment. Compaction also
+competed with ingest for disk bandwidth, so the worst ingest latency of the day reliably
+coincided with the largest compaction.
+
+Two further problems drove the decision. Ferrite's segment index was global rather than
+per-segment, so recovery after a node loss required replaying the whole index, which took
+over 40 minutes on a full node. And Ferrite could not seal a segment without a quiescent
+period, which made an online migration of any kind expensive.
+
+Decision
+
+We replace Ferrite with Halyard, an append-only segment store with no background compaction.
+Segments are written once, sealed at 512 MB or 15 minutes, and never rewritten. Each sealed
+segment carries its own index, so recovery loads only the segments a query touches.
+
+Alternatives considered
+
+Keep Ferrite and tune compaction. Rejected: tuning moves the cost around but does not remove
+write amplification, and the recovery time is a property of the global index, not of the
+compaction schedule.
+
+Tier cold data to object storage behind Ferrite, an option the team called Obsidian.
+Rejected for now: it addresses storage cost but not ingest latency or recovery time, and it
+adds a second failure domain to the read path. Obsidian remains a candidate for a later
+cost-reduction effort and is explicitly not cancelled by this decision.
+
+Adopt a third-party time-series engine. Rejected: none of the three engines evaluated
+supported the per-tenant isolation model Corvus requires, and adopting one would move the
+platform's core availability guarantee outside Meridian's control.
+
+Consequences
+
+Storage footprint grows by an estimated 20 to 30 percent because Halyard never compacts away
+superseded events; this is accepted as the price of predictable ingest latency.
+There is no secondary index on arbitrary fields, so queries that filter on a non-indexed
+field must scan the segments in their timespan. This is why per-tier query timespan limits
+exist.
+Recovery after node loss is bounded by the segments a query touches rather than by total
+retention.
+The migration is online and is delivered in release 4.3.

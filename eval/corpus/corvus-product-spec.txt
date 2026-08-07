@@ -1,0 +1,67 @@
+Corvus Platform - Product Specification v4.5
+Meridian Systems - Internal Document CS-SPEC-045
+
+1. Overview
+
+Corvus is the managed streaming ingestion platform built by Meridian Systems. It accepts
+event streams from customer edge agents, stores them in an append-only segment store, and
+serves them back through a query gateway. Corvus is sold as a hosted service only; there is
+no self-managed distribution.
+
+The platform has four components: the Kestrel collector, the Halyard storage engine, the
+Vane query gateway, and the Tessera control plane.
+
+2. Components
+
+2.1 Kestrel collector
+
+Kestrel is the agent customers install at the edge. It batches events into frames of up to
+4096 events, compresses each frame with zstd at level 3, and ships it to the ingest endpoint
+over HTTP/2. When the endpoint is unreachable Kestrel buffers to a local spool capped at
+2 GB and retries with exponential backoff for up to 6 attempts before dropping the frame and
+incrementing the kestrel_frames_dropped_total counter.
+
+2.2 Halyard storage engine
+
+Halyard is the append-only segment store that holds ingested events. A segment is sealed
+when it reaches 512 MB or after 15 minutes of open time, whichever comes first. Sealed
+segments are immutable and are replicated to three availability zones before the write is
+acknowledged. Halyard indexes each segment by stream id and by event timestamp; there is no
+secondary index on arbitrary fields.
+
+2.3 Vane query gateway
+
+Vane accepts queries written in CorvusQL and plans them against sealed and open segments.
+The maximum query timespan is 7 days on the Bronze tier, 90 days on Gold, and 400 days on
+Platinum. A query that exceeds its tier timespan is rejected with CORVUS_TIMESPAN_EXCEEDED
+rather than being silently truncated.
+
+2.4 Tessera control plane
+
+Tessera holds tenant configuration, the schema registry, and quota enforcement state. It is
+the only component with a write path to tenant metadata; Kestrel and Vane read a cached
+projection of it that is refreshed every 30 seconds.
+
+3. Service tiers and quotas
+
+Bronze tier: 5 MB/s sustained ingest, 7-day retention, 20 concurrent queries.
+Gold tier: 50 MB/s sustained ingest, 90-day retention, 100 concurrent queries.
+Platinum tier: 250 MB/s sustained ingest, 400-day retention, 400 concurrent queries.
+
+Sustained ingest is measured as a 5-minute rolling average of compressed bytes accepted.
+Bursts above the sustained rate are absorbed for up to 60 seconds before throttling begins.
+
+4. Hard limits
+
+The maximum size of a single event is 1 MiB. A stream schema may declare at most 512 fields.
+Field names must match the pattern ^[a-z][a-z0-9_]{0,62}$; a name that does not match is
+rejected at schema registration, not at ingest time. When a tenant exceeds its sustained
+ingest quota the endpoint responds 429 with the error code CORVUS_QUOTA_EXCEEDED and a
+Retry-After header.
+
+5. Schema evolution
+
+Adding a nullable field to an existing stream schema is a backward-compatible change and is
+applied in place. Changing the type of an existing field, or removing a field, requires
+registering a new stream version; Corvus keeps the previous version readable for the
+remainder of the tier's retention window.

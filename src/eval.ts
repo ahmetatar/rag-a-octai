@@ -2,11 +2,12 @@ import { promises as fs } from 'fs';
 import path from 'path';
 import config from '@app/config';
 import { createPdfPageFileHandler, createReranker, createTextFileHandler, registerFileHandlers } from '@core/rag';
-import { EvalReport, runEval } from '@core/rag/eval';
+import { EvalReport, GateConfig, GateResult, evaluateGates, parseGateConfig, runEval } from '@core/rag/eval';
 import { logger } from '@infrastructure/logging';
 
 const EVAL_DIR = path.resolve('eval');
 const RESULTS_DIR = path.join(EVAL_DIR, 'results');
+const GATES_PATH = path.join(EVAL_DIR, 'gates.json');
 
 /**
  * Entry point for `npm run eval`.
@@ -17,6 +18,9 @@ const RESULTS_DIR = path.join(EVAL_DIR, 'results');
  *
  * Set EVAL_GENERATE=true to also generate answers and score keyword coverage (needs a
  * reachable LLM). Retrieval metrics need only an embedding model and ChromaDB.
+ *
+ * Set EVAL_GATE=true to exit non-zero when the run misses a threshold in eval/gates.json.
+ * That is what CI runs; a local run reports the gates but never fails on them.
  */
 async function main(): Promise<void> {
   registerFileHandlers({
@@ -44,6 +48,19 @@ async function main(): Promise<void> {
   logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
   printReport(report);
   await writeReport(report);
+
+  const gates = await loadGates();
+  if (gates) {
+    const results = evaluateGates(report, gates);
+    printGates(results);
+    // Enforced only when asked. A local run is usually an experiment — a sweep of the
+    // threshold, a half-finished corpus — and failing it would train people to pass a flag to
+    // silence it. CI sets EVAL_GATE=true and gets the hard failure.
+    if (process.env.EVAL_GATE === 'true' && results.some((result) => !result.passed)) {
+      logger.error('Evaluation gates failed.');
+      process.exit(1);
+    }
+  }
 }
 
 /**
@@ -63,7 +80,7 @@ function printReport(report: EvalReport): void {
 
   logger.info(`\nEvaluation (k=${report.k}, threshold=${report.threshold}, ${breakdown.total} cases)`);
   logger.info(`Cases: ${breakdown.answerable} answerable, ${breakdown.unanswerable} unanswerable`);
-  logger.info(`${'id'.padEnd(idWidth)}  ans    P@k    R@k     RR    hit  absOK   gnd`);
+  logger.info(`${'id'.padEnd(idWidth)}  ans    P@k    R@k     RR    hit   snip  absOK   gnd`);
   for (const c of report.cases) {
     const row = [
       c.id.padEnd(idWidth),
@@ -72,6 +89,7 @@ function printReport(report: EvalReport): void {
       pct(c.recallAtK),
       num(c.reciprocalRank),
       (c.hit === undefined ? '-' : String(c.hit)).padStart(5),
+      pct(c.snippetCoverage),
       (c.abstentionCorrect === undefined ? '-' : c.abstentionCorrect ? 'ok' : 'FAIL').padStart(6),
       pct(c.groundedness),
     ].join(' ');
@@ -79,10 +97,10 @@ function printReport(report: EvalReport): void {
   }
 
   const a = report.aggregate;
-  logger.info('------------------------------------------------------------------');
+  logger.info('--------------------------------------------------------------------------');
   logger.info(
     `RETRIEVAL (answerable only)  P@k=${pct(a.precisionAtK)}  R@k=${pct(a.recallAtK)}  ` +
-      `MRR=${num(a.mrr, 3)}  hitRate=${pct(a.hitRate)}`
+      `MRR=${num(a.mrr, 3)}  hitRate=${pct(a.hitRate)}  snippet=${pct(a.snippetCoverage)}`
   );
   if (breakdown.unanswerable > 0) {
     logger.info(
@@ -96,6 +114,76 @@ function printReport(report: EvalReport): void {
   logger.info(
     `LATENCY                      retrieval=${num(a.retrievalMs, 0)}ms  generation=${num(a.generationMs, 0)}ms`
   );
+
+  printByTag(report);
+}
+
+/**
+ * Prints the per-tag aggregates. A whole-set mean can stay flat while one class of question
+ * collapses; this table is where that shows.
+ * @param report The evaluation report.
+ */
+function printByTag(report: EvalReport): void {
+  const pct = (value?: number) => (value === undefined ? '     -' : `${(value * 100).toFixed(1)}%`.padStart(6));
+  const num = (value?: number, digits = 3) => (value === undefined ? '     -' : value.toFixed(digits).padStart(6));
+
+  const tags = Object.keys(report.byTag);
+  if (tags.length === 0) {
+    return;
+  }
+
+  const tagWidth = Math.max(3, ...tags.map((tag) => tag.length));
+  logger.info(`\nBy tag (a case counts under every tag it carries, so these do not sum to the total)`);
+  logger.info(`${'tag'.padEnd(tagWidth)}      n    P@k    R@k    MRR    hit   snip  falseRetr`);
+  for (const tag of tags) {
+    const a = report.byTag[tag];
+    logger.info(
+      [
+        tag.padEnd(tagWidth),
+        String(report.breakdown.byTag[tag] ?? 0).padStart(6),
+        pct(a.precisionAtK),
+        pct(a.recallAtK),
+        num(a.mrr),
+        pct(a.hitRate),
+        pct(a.snippetCoverage),
+        pct(a.falseRetrievalRate).padStart(10),
+      ].join(' ')
+    );
+  }
+}
+
+/**
+ * Prints the gate verdicts.
+ * @param results The evaluated gates.
+ */
+function printGates(results: GateResult[]): void {
+  const failed = results.filter((result) => !result.passed);
+  logger.info(`\nGates (${results.length - failed.length}/${results.length} passed)`);
+  for (const result of results) {
+    const bound = [
+      result.bound.min !== undefined ? `min ${(result.bound.min * 100).toFixed(1)}%` : '',
+      result.bound.max !== undefined ? `max ${(result.bound.max * 100).toFixed(1)}%` : '',
+    ]
+      .filter(Boolean)
+      .join(', ');
+    const verdict = result.passed ? 'PASS' : `FAIL — ${result.reason}`;
+    logger.info(`  [${result.passed ? ' ok ' : 'FAIL'}] ${result.scope}.${result.metric} (${bound}): ${verdict}`);
+  }
+}
+
+/**
+ * Loads eval/gates.json when it exists.
+ * @returns The gate config, or undefined when no gates file is present.
+ */
+async function loadGates(): Promise<GateConfig | undefined> {
+  let raw: string;
+  try {
+    raw = await fs.readFile(GATES_PATH, 'utf-8');
+  } catch {
+    return undefined;
+  }
+
+  return parseGateConfig(JSON.parse(raw));
 }
 
 /**

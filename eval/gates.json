@@ -1,0 +1,25 @@
+{
+  "aggregate": {
+    "hitRate": { "min": 0.95 },
+    "recallAtK": { "min": 0.92 },
+    "mrr": { "min": 0.85 },
+    "snippetCoverage": { "min": 0.92 }
+  },
+  "byTag": {
+    "regression": {
+      "hitRate": { "min": 1.0 },
+      "snippetCoverage": { "min": 1.0 }
+    },
+    "golden": {
+      "hitRate": { "min": 0.95 },
+      "snippetCoverage": { "min": 0.9 }
+    },
+    "multi-source": {
+      "recallAtK": { "min": 0.7 },
+      "snippetCoverage": { "min": 0.7 }
+    },
+    "distractor": {
+      "mrr": { "min": 0.9 }
+    }
+  }
+}

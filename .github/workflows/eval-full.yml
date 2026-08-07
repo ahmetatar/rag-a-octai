@@ -1,0 +1,100 @@
+name: Full eval (generation)
+
+# The whole pipeline including answer generation: keyword coverage, groundedness, abstention.
+# Scheduled and manual only, and never a merge gate. It needs an LLM, takes minutes rather
+# than seconds, and its metrics move run to run because generation is non-deterministic —
+# gating on that would teach people to rerun until green. The numbers are reported; the
+# deterministic retrieval gate in ci.yml is what blocks a merge.
+
+on:
+  schedule:
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      generation_model:
+        description: Ollama model used for generation
+        default: qwen3:1.7b
+      rerank:
+        description: Run with the cross-encoder reranker enabled
+        type: boolean
+        default: false
+
+jobs:
+  full-eval:
+    name: Corpus + generation
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    services:
+      chromadb:
+        image: chromadb/chroma:latest
+        ports:
+          - 8000:8000
+        env:
+          IS_PERSISTENT: 'FALSE'
+          ANONYMIZED_TELEMETRY: 'FALSE'
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/api/v2/heartbeat"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+      ollama:
+        image: ollama/ollama:latest
+        ports:
+          - 11434:11434
+    env:
+      CHROMADB_HOST: localhost
+      CHROMADB_PORT: '8000'
+      OLLAMA_HOST: http://localhost:11434
+      EMBEDDING_PROVIDER: llama
+      EMBEDDING_MODEL_PATH: ./models/hf_ggml-org_bge-small-en-v1.5-Q8_0.Q8_0.gguf
+      GENERATION_MODEL: ${{ inputs.generation_model || 'qwen3:1.7b' }}
+      RAG_TOP_K: '3'
+      CHUNK_SIZE: '1000'
+      CHUNK_OVERLAP: '150'
+      RETRIEVAL_THRESHOLD: '0.45'
+      RERANK_ENABLED: ${{ inputs.rerank && 'true' || 'false' }}
+      RERANK_MODEL_PATH: ./models/hf_gpustack_bge-reranker-v2-m3.Q4_K_M.gguf
+      EVAL_COLLECTION: eval_full
+      EVAL_GENERATE: 'true'
+      # Reported, not enforced: see the header comment.
+      EVAL_GATE: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Cache the local models
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: eval-models-${{ inputs.rerank && 'with-reranker' || 'embedding-only' }}
+
+      - name: Download the embedding model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: npx --no node-llama-cpp pull --dir ./models hf:ggml-org/bge-small-en-v1.5-Q8_0-GGUF
+
+      - name: Download the reranker model
+        if: inputs.rerank && steps.model-cache.outputs.cache-hit != 'true'
+        run: npx --no node-llama-cpp pull --dir ./models "hf:gpustack/bge-reranker-v2-m3-GGUF:Q4_K_M"
+
+      - name: Pull the generation model
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf http://localhost:11434/api/tags > /dev/null && break
+            sleep 2
+          done
+          curl -sf http://localhost:11434/api/pull -d "{\"name\":\"${GENERATION_MODEL}\"}" > /dev/null
+
+      - name: Run the full eval
+        run: npm run eval
+
+      - name: Upload the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-full
+          path: eval/results/latest.json

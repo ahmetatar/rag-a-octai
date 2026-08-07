@@ -1,0 +1,86 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: Build and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+  retrieval-eval:
+    name: Retrieval eval (gate)
+    runs-on: ubuntu-latest
+    # Deterministic half of the harness only: a local embedding model and a real vector store,
+    # no LLM. Generation is non-deterministic, so a threshold on it would fail builds on noise
+    # rather than on regressions; the full run lives in eval-full.yml and never gates.
+    services:
+      chromadb:
+        image: chromadb/chroma:latest
+        ports:
+          - 8000:8000
+        env:
+          IS_PERSISTENT: 'FALSE'
+          ANONYMIZED_TELEMETRY: 'FALSE'
+        options: >-
+          --health-cmd "curl -f http://localhost:8000/api/v2/heartbeat"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      CHROMADB_HOST: localhost
+      CHROMADB_PORT: '8000'
+      # bge-small run locally through node-llama-cpp: 36 MB, CPU-only, and pinned, so the
+      # gate measures retrieval changes rather than a moving hosted model.
+      EMBEDDING_PROVIDER: llama
+      EMBEDDING_MODEL_PATH: ./models/hf_ggml-org_bge-small-en-v1.5-Q8_0.Q8_0.gguf
+      RAG_TOP_K: '3'
+      CHUNK_SIZE: '1000'
+      CHUNK_OVERLAP: '150'
+      RETRIEVAL_THRESHOLD: '0.45'
+      RERANK_ENABLED: 'false'
+      EVAL_COLLECTION: eval_ci
+      EVAL_GATE: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Cache the embedding model
+        id: model-cache
+        uses: actions/cache@v4
+        with:
+          path: models
+          key: bge-small-en-v1.5-Q8_0
+
+      - name: Download the embedding model
+        if: steps.model-cache.outputs.cache-hit != 'true'
+        run: npx --no node-llama-cpp pull --dir ./models hf:ggml-org/bge-small-en-v1.5-Q8_0-GGUF
+
+      - name: Run the retrieval eval
+        run: npm run eval
+
+      - name: Upload the eval report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report-retrieval
+          path: eval/results/latest.json

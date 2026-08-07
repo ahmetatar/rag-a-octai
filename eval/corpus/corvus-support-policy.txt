@@ -1,0 +1,59 @@
+Corvus Support and Service Level Policy
+Meridian Systems - Internal Document CS-SUP-012, effective 2032-01-01
+
+1. Scope
+
+This policy covers support for the Corvus platform only. It does not cover the customer's
+own Kestrel deployment beyond the agent's documented configuration surface, and it does not
+cover custom CorvusQL authored by the customer.
+
+2. Severity definitions
+
+Sev-1: production ingest is stopped or data loss is occurring.
+Sev-2: ingest or query is degraded but a workaround exists.
+Sev-3: a defect with no production impact.
+Sev-4: a question or documentation request.
+
+3. First-response targets
+
+The first-response target is the time from ticket creation to a human acknowledgement that
+names an owner. Automated receipt mail does not count as a first response.
+
+Bronze tier: Sev-1 next business day, Sev-2 two business days, Sev-3 five business days,
+Sev-4 best effort.
+Gold tier: Sev-1 one hour, Sev-2 four hours, Sev-3 one business day, Sev-4 three business
+days.
+Platinum tier: Sev-1 fifteen minutes, Sev-2 one hour, Sev-3 four hours, Sev-4 one business
+day.
+
+Platinum first-response targets apply 24x7. Gold targets apply during regional business
+hours, 08:00 to 20:00 local time, Monday to Friday.
+
+4. Update cadence and escalation
+
+While a Sev-1 remains open, the owning engineer posts a status update every 30 minutes on
+Platinum and every two hours on Gold. If two consecutive updates are missed the ticket is
+escalated automatically to the Duty Manager, who must contact the customer within
+15 minutes of the escalation firing.
+
+A customer may request a manual escalation at any time through their account team. A manual
+escalation raises the update cadence to the Platinum rate for the life of the ticket
+regardless of the customer's tier.
+
+5. Availability commitment and service credits
+
+Meridian commits to 99.9 percent monthly availability of the Corvus ingest endpoint for Gold
+and Platinum tenants. Availability is calculated per calendar month as accepted requests
+divided by total well-formed requests.
+
+If monthly availability falls below 99.9 percent, the tenant receives a service credit of
+10 percent of that month's platform fee. If it falls below 99.0 percent the credit is
+25 percent. Credits are capped at 25 percent of the monthly fee and must be claimed within
+30 days of the end of the affected month. Bronze tenants receive no availability commitment
+and no service credits.
+
+6. Exclusions
+
+Downtime caused by a customer exceeding a documented hard limit, by a scheduled maintenance
+window announced at least 72 hours in advance, or by a force majeure event is excluded from
+the availability calculation.

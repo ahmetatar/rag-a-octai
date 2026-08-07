@@ -12,6 +12,7 @@ import {
   precisionAtK,
   recallAtK,
   reciprocalRank,
+  snippetCoverage,
 } from './metrics';
 
 /** Builds an outcome, so each test states only the field it is about. */
@@ -99,6 +100,46 @@ describe('keywordCoverage', () => {
 
   it('is 1 when no keywords are specified', () => {
     expect(keywordCoverage('anything', [])).toBe(1);
+  });
+
+  // "25%" and "25 percent" are the same fact; scoring one of them a miss would measure the
+  // model's phrasing rather than whether it found the number.
+  it('accepts any spelling when a keyword lists alternatives', () => {
+    expect(keywordCoverage('The credit is 25%.', [['25 percent', '25%']])).toBe(1);
+    expect(keywordCoverage('The credit is 25 percent.', [['25 percent', '25%']])).toBe(1);
+  });
+
+  it('counts an alternatives group as one fact, not as several', () => {
+    // One group matched, one plain keyword missed: half, not two thirds.
+    expect(keywordCoverage('The credit is 25%.', [['25 percent', '25%'], 'Platinum'])).toBe(0.5);
+  });
+
+  it('misses an alternatives group when no spelling appears', () => {
+    expect(keywordCoverage('The credit is ten percent.', [['25 percent', '25%']])).toBe(0);
+  });
+});
+
+describe('snippetCoverage', () => {
+  it('is 1 when every expected passage is in the retrieved text', () => {
+    expect(snippetCoverage(['... capped at 2 GB and retries ...'], ['capped at 2 GB'])).toBe(1);
+  });
+
+  it('is partial when only some passages came back', () => {
+    expect(snippetCoverage(['capped at 2 GB'], ['capped at 2 GB', 'sealed at 512 MB'])).toBe(0.5);
+  });
+
+  // A corpus file is hard-wrapped, so the passage in the answer key spans a newline that the
+  // chunk does not have to reproduce identically.
+  it('ignores differences in whitespace and case', () => {
+    expect(snippetCoverage(['must contact the customer within 15 minutes'], ['contact the Customer\n  within 15 minutes'])).toBe(1);
+  });
+
+  it('is undefined when the case declares no snippets', () => {
+    expect(snippetCoverage(['anything'], [])).toBeUndefined();
+  });
+
+  it('is 0 when nothing was retrieved', () => {
+    expect(snippetCoverage([], ['capped at 2 GB'])).toBe(0);
   });
 });
 

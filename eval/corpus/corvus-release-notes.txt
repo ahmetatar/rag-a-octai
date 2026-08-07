@@ -1,0 +1,48 @@
+Corvus Release Notes - 4.x series
+Meridian Systems - Internal Document CS-REL-004
+
+Release 4.1 - 2031-02-14
+
+Added the CorvusQL sample_by clause for downsampled reads.
+Kestrel spool format changed from v1 to v2; agents older than 4.1 continue to ship v1 and
+are transcoded server side. Transcoding is scheduled for removal in 5.0.
+Fixed a defect where a sealed segment could be reported twice in a query plan.
+
+Release 4.2 - 2031-05-30
+
+Introduced the Tessera schema registry as the single source of truth for stream schemas.
+Schemas previously declared inline in Kestrel configuration are migrated automatically on
+first connection after upgrade.
+Raised the maximum schema field count from 256 to 512.
+
+Release 4.3 - 2031-11-06
+
+Migrated the storage layer from the Ferrite engine to the Halyard engine, implementing
+decision ADR-0007. The migration ran online; tenants observed elevated query latency of
+roughly 15 percent for the duration of their backfill window and no ingest interruption.
+Segment sealing moved from a fixed 5-minute timer to the 512 MB or 15-minute rule.
+
+Release 4.4 - 2032-01-23
+
+Raised the Platinum tier sustained ingest cap from 150 MB/s to 250 MB/s. The Gold and Bronze
+caps were unchanged.
+Added the Retry-After header to CORVUS_QUOTA_EXCEEDED responses; before 4.4 clients had to
+guess a backoff interval.
+Reduced the Tessera projection refresh interval from 120 seconds to 30 seconds.
+
+Release 4.5 - 2032-03-09
+
+Added the CorvusQL window_join operator for correlating two streams inside a bounded time
+window.
+Query timespan limits are now enforced per tier at plan time and return
+CORVUS_TIMESPAN_EXCEEDED; previously an over-long query was silently truncated to the tier
+limit, which produced results that looked complete but were not.
+Kestrel now emits kestrel_frames_dropped_total so spool overflow is visible in customer
+dashboards.
+
+Known issues in 4.5
+
+A window_join across more than two streams is planned but not supported; the planner
+rejects it with CORVUS_UNSUPPORTED_JOIN.
+Backfill of a stream whose schema changed type mid-window may produce a partial result. A
+fix is tracked for 4.6.

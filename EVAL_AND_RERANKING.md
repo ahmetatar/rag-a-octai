@@ -30,12 +30,26 @@ worse.
 The harness is a **graded exam with an answer key**:
 
 - `eval/corpus/` — a set of documents (the "textbook").
-- `eval/dataset.jsonl` — questions, each labelled with **which document holds the answer**.
+- `eval/dataset.jsonl` — questions, each labelled with **which document holds the answer**,
+  **which passage** of it, why the case exists, and what class of question it is.
+- `eval/gates.json` — the thresholds a run must clear. CI fails the build below them.
 - `npm run eval` — ingests the corpus, runs each question through retrieval, and checks
   whether the right document came back. Then it scores the run and prints a report.
 
 Because the answer key is fixed, you can run it before and after any change and compare the
 scores.
+
+### 1.2.1 The corpus: why it is deliberately fictional
+
+Most of the corpus describes **Meridian Systems** and its **Corvus** platform — a company and
+a product that do not exist. That is the point. On a general-knowledge corpus the LLM answers
+correctly whether or not retrieval worked, so the answer metrics measure the model's memory
+instead of the pipeline. Nobody's model knows what `CORVUS_QUOTA_EXCEEDED` means, so a right
+answer can only have come from retrieval.
+
+The three original general-knowledge documents (solar system, photosynthesis, Roman empire)
+are still there, carrying the ten original questions under the `regression` tag, so a change
+that breaks the old behaviour still shows up.
 
 ### 1.3 The metrics (plain language)
 
@@ -47,12 +61,35 @@ which sources *were* retrieved, in order. From that we compute:
 | **hit@k** | Did the right document appear at all (in the top-k)? | 0 or 1 |
 | **recall@k** | Of the documents that should appear, how many did? | 0–1 |
 | **precision@k** | Of the documents we returned, how many were relevant? | 0–1 |
+| **snippet coverage** | Did the specific *passage* holding the answer come back, not just the right file? | 0–1 |
 | **MRR** (reciprocal rank) | How *high* was the right document ranked? (1.0 = always first) | 0–1 |
 | **keyword coverage** | Does the generated answer mention the expected key facts? | 0–1 |
 | **groundedness** | Did the answer come from the sources, or from the model's memory? | 0–1 |
 | **abstention accuracy** | Did it answer when it could, and decline when it could not? | 0–1 |
 | **false answer rate** | Of the unanswerable questions, how many did it answer anyway? | 0–1, lower better |
 | **false retrieval rate** | Of the unanswerable questions, how many still returned chunks? | 0–1, lower better |
+
+#### Source level vs passage level
+
+`expectedSources` grades at file level: the right document came back. That is not the same as
+the model getting what it needs — a document can be retrieved through a chunk that says
+nothing about the question. `expectedSnippets` closes that gap: each answerable case quotes a
+**verbatim phrase** from the corpus, and `snippetCoverage` checks whether that phrase is in the
+text actually retrieved.
+
+Phrases rather than chunk ids, on purpose. A chunk id is invalidated by every change to
+`CHUNK_SIZE` or `CHUNK_OVERLAP` — exactly the knobs the harness exists to sweep — while a
+quoted phrase survives rechunking. A unit test (`runner.test.ts`) verifies every snippet is
+still present in its expected source, so an edit to a corpus document that silently
+invalidates a case fails the build, with no vector store or embedding model required.
+
+#### Per-tag aggregates
+
+Each case carries `tags` (`direct`, `indirect`, `distractor`, `multi-source`, `near-corpus`,
+`out-of-scope`, `regression`, `golden`, …) and the report prints a **per-tag table** under the
+aggregate one. This matters more than it sounds: on the current set the overall keyword
+coverage is 96%, while the `multi-source` cases sit at 70%. A whole-set mean would have hidden
+a class of question the system is measurably bad at.
 
 > **Why P@k can look "low":** if a question has one correct document and we return `k=3`
 > chunks, the best possible precision is 1/3 = 33%. So on a single-answer dataset, **MRR** is
@@ -135,45 +172,48 @@ default and enabled with two environment variables.
 EMBEDDING_PROVIDER=llama npm run eval
 ```
 
-You'll see a per-question table and aggregate lines. Measured on the shipped corpus with the
-local bge embedding model, `qwen3:1.7b` for generation and `EVAL_GENERATE=true`:
+You'll see a per-question table, the aggregate lines, a per-tag table and the gate verdicts.
+Measured on the shipped corpus with the local bge embedding model, `qwen3:1.7b` for generation
+and `EVAL_GENERATE=true`:
 
 ```
-Evaluation (k=3, threshold=0.45, 17 cases)
-Cases: 10 answerable, 7 unanswerable
-id                                 ans    P@k    R@k     RR    hit  absOK   gnd
-largest-planet                     yes  33.3% 100.0%   1.00     1     ok  71.4%
-sun-energy                         yes  50.0% 100.0%   0.50     1     ok   5.7%   ← ranked 2nd
+Evaluation (k=3, threshold=0.45, 66 cases)
+Cases: 51 answerable, 15 unanswerable
+id                                 ans    P@k    R@k     RR    hit   snip  absOK   gnd
+largest-planet                     yes  33.3% 100.0%   1.00     1 100.0%     ok  71.4%
+sun-energy                         yes  33.3% 100.0%   0.50     1 100.0%     ok   5.7%   ← ranked 2nd
+spec-quota-error-code              yes  66.7% 100.0%   1.00     1 100.0%     ok  41.2%
+multi-sev1-page-and-sla            yes  66.7%  50.0%   1.00     1  50.0%     ok  22.0%   ← one of two documents
 ...
-unanswerable-saturn-moons           no      -      -      -     -     ok      -
-unanswerable-out-of-scope-capital   no      -      -      -     -     ok      -
-------------------------------------------------------------------
-RETRIEVAL (answerable only)  P@k= 61.7%  R@k=100.0%  MRR= 0.950  hitRate=100.0%
-ABSTENTION                   accuracy=100.0%  falseAnswerRate=  0.0%  falseRetrievalRate= 85.7%
-ANSWER                       kwCoverage=100.0%  groundedness= 38.7%
-LATENCY                      retrieval=    17ms  generation=  2103ms
+unanswerable-thirdparty-engine-names no     -      -      -     -      -   FAIL  17.5%
+--------------------------------------------------------------------------
+RETRIEVAL (answerable only)  P@k= 56.2%  R@k= 98.0%  MRR= 0.928  hitRate=100.0%  snippet= 98.0%
+ABSTENTION                   accuracy= 92.4%  falseAnswerRate= 20.0%  falseRetrievalRate=100.0%
+ANSWER                       kwCoverage= 96.2%  groundedness= 36.8%
+LATENCY                      retrieval=    19ms  generation=  3576ms
 ```
 
 Read the retrieval line as: every answerable question retrieves the right document
-(**hitRate 100%**), but one case (`sun-energy`) ranked it **second** (RR = 0.50), dragging
-**MRR down to 0.950**. Unanswerable rows show `-` for retrieval metrics by design — see
+(**hitRate 100%**), but ranking is imperfect (**MRR 0.928**) and 2% of the answer-bearing
+passages never make it into the top 3 (**snippet 98%**). Unanswerable rows show `-` for
+retrieval metrics by design — see
 [Answerable vs unanswerable cases](#answerable-vs-unanswerable-cases).
 
-The abstention line is where hallucination shows up, and this run splits the two failures
-cleanly:
+The abstention line is where hallucination shows up:
 
-- `falseAnswerRate = 0%` — the model never answered a question the corpus could not answer.
-  The prompt is holding the line.
-- `falseRetrievalRate = 85.7%` — but retrieval still returned chunks for **6 of 7**
-  unanswerable questions. They were on-topic and above threshold, just not answer-bearing.
+- `falseAnswerRate = 20%` — the model answered three questions the corpus cannot answer,
+  including inventing a latency SLA that appears nowhere. The prompt alone does not hold the
+  line once the questions get close enough to the corpus.
+- `falseRetrievalRate = 100%` — retrieval returned above-threshold chunks for **every**
+  unanswerable question. On-topic, above threshold, not answer-bearing.
 
-That is a retrieval/threshold problem sitting behind a prompt that currently compensates for
-it. It is invisible to P@k and recall, and it is exactly what these metrics exist to surface.
+That is a retrieval/threshold problem, and it is invisible to P@k and recall. It is exactly
+what these metrics exist to surface.
 
-> **`kwCoverage = 100%` here means nothing.** The shipped corpus is general knowledge, so
-> `qwen3` produces the expected keywords whether or not retrieval worked — see the dataset
-> tips below. `groundedness = 38.7%` is the more honest signal: the answers are largely
-> phrased in the model's own words rather than lifted from the chunks.
+> **Generation metrics move between runs.** Two consecutive runs of this same commit reported
+> `falseAnswerRate` 13.3% and 20.0%, and `abstentionAccuracy` 95.5% and 92.4%. The LLM is
+> non-deterministic, so these numbers are a signal, not a contract — which is why CI never
+> gates on them.
 
 The full report is written to `eval/results/latest.json` for diffing.
 
@@ -200,20 +240,66 @@ RERANK_FETCH_K=10 \
 npm run eval
 ```
 
-Now the report shows:
+On the current corpus the A/B looks like this:
+
+| Metric | Reranker OFF | Reranker ON |
+|---|---|---|
+| P@k | 56.2% | **89.2%** |
+| R@k | **98.0%** | 91.2% |
+| MRR | **0.928** | 0.912 |
+| hitRate | **100.0%** | 92.2% |
+| snippetCoverage | **98.0%** | 89.2% |
+| falseRetrievalRate | 100.0% | **13.3%** |
+| retrieval latency | **17ms** | 1439ms |
+
+**The reranker is not a free win — it buys precision with recall.** It reads each
+`(question, chunk)` pair properly, so it throws away the on-topic-but-useless chunks that made
+`falseRetrievalRate` 100%. But it is aggressive: average chunks kept drops from 2.92 to 1.14 on
+answerable questions, and in four cases it discards the correct document entirely. On the
+`multi-source` questions — the ones that need two documents — recall falls from 80% to 70%.
+
+**This is the whole point:** we didn't guess, we measured. And the measurement contradicted the
+earlier one taken on a three-chunk corpus, where the reranker looked free. Whether to enable it
+is a judgement about your traffic: if unanswerable questions dominate, the precision is worth
+the recall; if multi-document answers matter, tune the threshold first
+(see `docs/rag-improvements-task-list.md`, item 4).
+
+### Step 5 — Check the gates
+
+`eval/gates.json` holds the thresholds a run must clear:
+
+```json
+{
+  "aggregate": { "hitRate": { "min": 0.95 }, "snippetCoverage": { "min": 0.92 } },
+  "byTag": { "regression": { "hitRate": { "min": 1.0 } }, "multi-source": { "recallAtK": { "min": 0.7 } } }
+}
+```
+
+Every run prints the verdicts. Locally they are informational; with `EVAL_GATE=true` a miss
+exits non-zero, which is what CI does:
+
+```bash
+EVAL_GATE=true EMBEDDING_PROVIDER=llama npm run eval
+```
 
 ```
-id                     ans    P@k    R@k     RR    hit  absOK   gnd
-sun-energy             yes  33.3% 100.0%   1.00      1     ok  68.0%   ← now ranked 1st
-...
-RETRIEVAL (answerable only)  P@k=33.3%  R@k=100.0%  MRR= 1.000  hitRate=100.0%
+Gates (11/11 passed)
+  [ ok ] aggregate.hitRate (min 95.0%): PASS
+  [ ok ] tag:regression.hitRate (min 100.0%): PASS
+  [ ok ] tag:multi-source.recallAtK (min 70.0%): PASS
+  ...
 ```
 
-**MRR improved from 0.950 → 1.000.** The reranker read each `(question, chunk)` pair, saw
-that the fusion chunk best answers "how does the Sun produce energy?", and pulled it to rank
-1. **This is the whole point:** we didn't guess reranking helped — we measured it.
+Two rules are enforced in code, not by convention:
 
-### Step 5 — Use reranking in the running API
+- **Only deterministic retrieval metrics may gate.** Writing `groundedness` or
+  `falseAnswerRate` into the file is a hard error — those come from a non-deterministic LLM,
+  and a threshold on them fails builds on noise instead of on regressions.
+- **A metric the run did not produce is a failure, not a pass.** A gate that quietly
+  disappears with its metric is worse than no gate: the build stays green while the thing it
+  guards stops being measured. Same for a per-tag gate whose tag no case carries any more.
+
+### Step 6 — Use reranking in the running API
 
 Set the same variables for the server and start it:
 
@@ -243,17 +329,32 @@ next run.
 Append lines to `eval/dataset.jsonl` (one JSON object per line):
 
 ```json
-{"id": "my-question", "question": "What ...?", "expectedSources": ["my-doc.txt"], "expectedKeywords": ["fact1", "fact2"]}
+{"id": "my-question", "question": "What ...?", "expectedSources": ["my-doc.txt"], "expectedKeywords": ["fact1", ["25 percent", "25%"]], "expectedSnippets": ["the exact phrase from my-doc.txt"], "tags": ["golden", "direct"], "rationale": "Section 3 of my-doc.txt; stated once, verbatim."}
 ```
 
 - `expectedSources` — the file name(s) whose chunks should be retrieved. Drives the retrieval
   metrics. Empty for a question the corpus cannot answer.
-- `expectedKeywords` — optional; key facts the generated answer should contain. Drives
-  keyword coverage (only scored when answer generation is on, see below).
+- `expectedSnippets` — **required for answerable cases** (a unit test enforces it). Verbatim
+  phrases from the corpus that correct retrieval must surface. Drives snippet coverage.
+  Matching ignores case and whitespace, so a phrase may span a line break in the source file.
+- `expectedKeywords` — optional; key facts the generated answer should contain. Drives keyword
+  coverage (only scored when answer generation is on, see below). An entry may be an **array
+  of accepted spellings of the same fact** — `["25 percent", "25%"]` counts as one fact, so a
+  correct answer is not scored a miss for phrasing.
 - `expectedAnswerable` — optional; defaults to `expectedSources.length > 0`. Set it to `false`
   explicitly for a question that is unanswerable *even though related documents exist*.
 - `expectedRefusal` — optional; why the case is unanswerable. Documentation for whoever reads
   the report later, not scored.
+- `tags` — what class of question this is. Drives the per-tag table and lets a gate protect one
+  class specifically. Conventional tags: `regression`, `golden`, `direct`, `indirect`,
+  `distractor`, `multi-source`, `unanswerable`, `near-corpus`, `out-of-scope`, plus one per
+  source document.
+- `rationale` — one sentence on why the case exists and where its answer comes from. Not
+  scored. It is what makes a disputed answer key settleable six months later.
+
+The dataset invariants (unique ids, snippets that still occur in their source, a rationale on
+every case, at least two sources on a `multi-source` case) are checked by unit tests, so a
+malformed addition fails `npm test` rather than quietly skewing a run.
 
 An unanswerable case looks like this:
 
@@ -279,12 +380,20 @@ retrieval-only and so is reported either way.
 
 ### Tips for a meaningful dataset
 
-- Include **distractor documents** on similar topics so vector search has to discriminate —
-  that's where reranking earns its keep.
-- Prefer questions with a **single correct source** for clean MRR interpretation.
 - **Make sure the answers are not already in the model's head.** On a general-knowledge corpus
   the LLM answers correctly whether or not retrieval worked, so keyword coverage measures
-  nothing. Domain-specific content the model cannot know is what makes answer metrics real.
+  nothing. This is why the Corvus documents are fictional; write new ones the same way.
+- Include **distractor documents** on similar topics so vector search has to discriminate —
+  that's where reranking earns its keep. Better still, write **distractor pairs**: two
+  questions that share vocabulary but live in different documents (the Gold tier's SLA is in
+  the support policy; the Gold tier's ingest quota is in the spec).
+- Cover **direct** (wording close to the document), **indirect** (needs a synonym or an
+  inference) and **multi-source** questions. Prefer a single correct source for clean MRR
+  interpretation, and tag the multi-source ones so their recall is read separately.
+- **Add unanswerable cases in both flavours** — fully out of scope, and deliberately close to
+  the corpus. The near-corpus ones are what catch hallucination.
+- Make the documents **long enough to split into several chunks**. If every file is one chunk,
+  `CHUNK_OVERLAP` and `RERANK_FETCH_K` have nothing to act on and their A/Bs are meaningless.
 - Keep the corpus small and fast; the harness is meant to run often.
 
 ---
@@ -299,6 +408,7 @@ retrieval-only and so is reported either way.
 | `EVAL_COLLECTION` | ChromaDB collection the harness uses | `eval_harness` |
 | `EVAL_GENERATE` | Also generate answers and score answer/abstention metrics | `false` |
 | `EVAL_THRESHOLD` | Minimum score a chunk must reach; sweeps the cut without touching app config | `RETRIEVAL_THRESHOLD` |
+| `EVAL_GATE` | Exit non-zero when a threshold in `eval/gates.json` is missed | `false` |
 | `RAG_TOP_K` | Final number of chunks kept (`k` in the metrics) | `3` |
 
 ## Part 5 — Where the code lives
@@ -308,20 +418,46 @@ retrieval-only and so is reported either way.
 | `src/core/rag/eval/metrics.ts` | Pure metric functions (precision/recall/MRR/…), unit-tested |
 | `src/core/rag/eval/runner.ts` | Ingests corpus, runs cases, applies reranking + threshold, aggregates |
 | `src/core/rag/llm/abstention.ts` | The `NO_ANSWER` sentinel protocol shared by the prompt, the API and the eval |
-| `src/eval.ts` | `npm run eval` entry point: prints the table, writes JSON |
+| `src/core/rag/eval/gates.ts` | Gate thresholds: parsing, validation, verdicts; unit-tested |
+| `src/eval.ts` | `npm run eval` entry point: prints the tables and gates, writes JSON |
 | `src/core/rag/reranking/reranker.ts` | `Reranker` abstraction |
 | `src/core/rag/reranking/llama-reranker.ts` | Local GGUF reranker via node-llama-cpp |
 | `src/core/rag/rag-orchestrator.ts` | Query pipeline; applies reranking in production |
 | `eval/corpus/`, `eval/dataset.jsonl` | The corpus and the graded questions |
+| `eval/gates.json` | The thresholds CI enforces |
+| `.github/workflows/ci.yml` | Build + unit tests, and the deterministic retrieval eval as a merge gate |
+| `.github/workflows/eval-full.yml` | Nightly/manual full run with generation; reported, never a gate |
+
+---
+
+## Part 6 — CI
+
+Two workflows, on purpose:
+
+| Workflow | When | Gates the build? |
+|---|---|---|
+| `ci.yml` | every push and PR | **Yes** — build, unit tests, and the deterministic retrieval eval against `eval/gates.json` |
+| `eval-full.yml` | nightly + manual | No — the full run including generation; metrics reported and uploaded as an artifact |
+
+The split is not squeamishness about slow jobs. The retrieval half needs only a local 36 MB
+embedding model and a ChromaDB service container, and it gives the same answer every time, so
+a threshold on it means something. The generation half needs an LLM, takes minutes, and
+returns different numbers on identical code — gating it would teach everyone to rerun until
+green, which is worse than not gating at all.
+
+The cheapest check of all is in the unit tests: the answer key is verified against the corpus
+with no services running, so an edited document that invalidates a case fails immediately.
 
 ---
 
 ## One-paragraph summary (for explaining it to someone)
 
-> We built an automated exam for the search half of our RAG system. We give it questions
-> whose correct source document we already know, it runs them through retrieval, and it grades
-> whether the right document came back and how highly it was ranked — as numbers like MRR. On
-> top of that we added an optional cross-encoder reranker: after the fast vector search fetches
-> a shortlist, the reranker rereads each candidate together with the question and reorders them
-> by true relevance. Because we had the exam first, we could prove the reranker's value with a
-> number: MRR went from 0.95 to 1.0.
+> We built an automated exam for the search half of our RAG system. We give it questions whose
+> correct source document — and correct *passage* — we already know, it runs them through
+> retrieval, and it grades whether the right text came back and how highly it was ranked. Most
+> of the corpus describes a company that does not exist, so a right answer can only have come
+> from retrieval and not from the model's memory. The exam runs on every pull request and fails
+> the build when the deterministic scores drop. Having it first is what let us measure, rather
+> than guess, that our cross-encoder reranker trades recall for precision instead of being a
+> free improvement — which is the opposite of what we believed before we had a realistic
+> dataset.

@@ -1,0 +1,54 @@
+Meridian Systems - Engineering Operations Handbook
+Internal Document MS-OPS-003, revision 9, revised 2032-02-17
+
+1. Environments
+
+Corvus runs in three environments. The sandbox environment crv-sbx holds synthetic data only
+and is reset every Sunday at 02:00 UTC. The staging environment crv-stg mirrors the
+production topology at one tenth the capacity and holds anonymised data. The production
+environment crv-prd is the only environment with customer data.
+
+No engineer has standing write access to crv-prd. Write access is granted for four hours at
+a time through a Portway request, which requires a second approver from a different team.
+Read access to crv-prd logs is standing for members of the platform team.
+
+2. Deployment windows
+
+Deployments to crv-prd are permitted Monday to Thursday between 09:00 and 16:00 in the
+deploying engineer's local time. There are no Friday deployments. A deployment freeze applies
+from 20 December to 4 January and for the 72 hours before any announced customer event.
+
+A change that is required to resolve an open Sev-1 may be deployed outside these windows with
+verbal approval from the Duty Manager, recorded in the incident channel afterwards.
+
+3. On-call
+
+Corvus ingest is paged through the Nightwatch rotation. A Sev-1 page goes to the primary
+on-call; if it is not acknowledged within 10 minutes it escalates to the secondary, and after
+a further 10 minutes to the Duty Manager. Query-path alerts page the same rotation but with a
+20-minute acknowledgement window.
+
+An on-call shift runs from Wednesday 10:00 to the following Wednesday 10:00. An engineer may
+not be scheduled for two consecutive shifts. Handover happens in a written handover note in
+the rotation channel; a verbal handover alone is not sufficient.
+
+4. Incident review
+
+Every Sev-1 and every Sev-2 that breaches its first-response target gets a written review
+within five working days. Reviews are blameless and are published to the whole engineering
+organisation, not only to the team that owns the service. The review must record the customer
+impact in the customer's terms, not in internal metrics.
+
+Action items from a review carry an owner and a due date. An action item that slips its due
+date twice is escalated to the engineering leadership review, which happens monthly.
+
+5. Access requests and tooling
+
+All access requests, including temporary crv-prd write access, go through Portway. Portway
+requests expire automatically; there is no renewal, a new request must be filed. Requests for
+access to the Tessera control plane additionally require sign-off from the platform team
+lead.
+
+Laptops are enrolled in the standard management profile before any repository access is
+granted. Source code may not be cloned to an unenrolled machine, including personal machines
+used during on-call.

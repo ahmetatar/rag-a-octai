@@ -84,20 +84,33 @@ export function reciprocalRank(retrieved: string[], expected: string[]): number 
 }
 
 /**
- * Keyword coverage: the fraction of expected keywords present (case-insensitive) in an
- * answer. A cheap, deterministic proxy for whether the answer contains the key facts,
- * usable without an LLM judge. Returns 1 when no keywords were specified.
- * @param answer The generated answer.
- * @param keywords Key facts the answer should mention.
+ * One expected fact. A plain string must appear verbatim; an array is a set of accepted
+ * spellings of the SAME fact, any one of which counts.
+ *
+ * The alternatives matter: a model that writes "25%" where the corpus says "25 percent" has
+ * answered correctly, and a single-spelling key would score that a miss. Without this the
+ * metric measures phrasing luck rather than whether the fact came through.
  */
-export function keywordCoverage(answer: string, keywords: string[]): number {
+export type ExpectedKeyword = string | string[];
+
+/**
+ * Keyword coverage: the fraction of expected facts present (case-insensitive) in an answer.
+ * A cheap, deterministic proxy for whether the answer contains the key facts, usable without
+ * an LLM judge. Returns 1 when no keywords were specified.
+ *
+ * @param answer The generated answer.
+ * @param keywords Key facts the answer should mention; see {@link ExpectedKeyword}.
+ */
+export function keywordCoverage(answer: string, keywords: ExpectedKeyword[]): number {
   if (keywords.length === 0) {
     return 1;
   }
 
   const haystack = answer.toLowerCase();
-  const found = keywords.filter((keyword) => haystack.includes(keyword.toLowerCase())).length;
-  return found / keywords.length;
+  const matches = (keyword: ExpectedKeyword) =>
+    (Array.isArray(keyword) ? keyword : [keyword]).some((spelling) => haystack.includes(spelling.toLowerCase()));
+
+  return keywords.filter(matches).length / keywords.length;
 }
 
 /**
@@ -133,6 +146,34 @@ export function groundedness(answer: string, sourceTexts: string[]): number {
 
   const supported = answerGrams.filter((gram) => sourceGrams.has(gram)).length;
   return supported / answerGrams.length;
+}
+
+/**
+ * Snippet coverage: the fraction of a case's expected snippets that appear in the text of
+ * the retrieved chunks. Source-level metrics only say the right FILE came back; this says
+ * the right PASSAGE came back, which is what the model actually reads.
+ *
+ * Matching is whitespace-insensitive and case-insensitive, because a corpus is hard-wrapped
+ * and a snippet that straddles a line break is still the same passage. It is deliberately
+ * NOT chunk-id based: chunk ids shift whenever chunk size or overlap changes, which are
+ * exactly the knobs the eval exists to sweep, so an id-based answer key would invalidate
+ * itself on every experiment. A verbatim phrase survives rechunking.
+ *
+ * Returns `undefined` when the case declares no snippets, so cases without a passage-level
+ * answer key neither inflate nor deflate the aggregate.
+ *
+ * @param retrievedTexts The contents of the chunks that survived retrieval and thresholding.
+ * @param snippets Verbatim phrases from the corpus that a correct retrieval must surface.
+ * @returns A score in [0, 1], or undefined when no snippets were declared.
+ */
+export function snippetCoverage(retrievedTexts: string[], snippets: string[]): number | undefined {
+  if (snippets.length === 0) {
+    return undefined;
+  }
+
+  const haystack = normaliseWhitespace(retrievedTexts.join('\n'));
+  const found = snippets.filter((snippet) => haystack.includes(normaliseWhitespace(snippet))).length;
+  return found / snippets.length;
 }
 
 /**
@@ -244,4 +285,13 @@ function trigrams(text: string): string[] {
   }
 
   return grams;
+}
+
+/**
+ * Lowercases text and collapses every run of whitespace to a single space, so that a hard
+ * line break inside a corpus file does not stop a snippet from matching.
+ * @param text The text to normalise.
+ */
+function normaliseWhitespace(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, ' ').trim();
 }
