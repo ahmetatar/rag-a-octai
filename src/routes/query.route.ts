@@ -17,7 +17,11 @@ const getRagOrchestrator = lazySingleton(createRagOrchestrator);
  *
  * `topK` and `threshold` fall back to the configured defaults, so a caller can tune a
  * single request (e.g. widen recall for a vague question) without changing the server.
- * Similarity scores are bounded by [-1, 1], so a threshold outside that range would
+ *
+ * A `threshold` is graded against whichever score scale the server ends up filtering —
+ * cosine similarity in [-1, 1] without reranking, cross-encoder relevance in [0, 1] with it.
+ * The response reports which one applied as `scoreScale`, since the same number is not
+ * equally strict on both. The accepted range spans both scales; a value outside it would
  * either match everything or nothing and is rejected as a mistake.
  */
 const queryRequestSchema = z.object({
@@ -69,7 +73,10 @@ router.post('/', async (req, res) => {
     const answer = await ragOrchestrator.query(
       query,
       topK ?? config.topK,
-      threshold ?? config.retrievalThreshold,
+      // Left undefined on purpose: the orchestrator picks the default for whichever score
+      // scale it ends up filtering, which this layer cannot know (reranking may be off, or
+      // may fail and fall back to cosine scores mid-request).
+      threshold,
       config.maxTokens,
       tenantOf(res.locals)
     );

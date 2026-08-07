@@ -11,6 +11,7 @@ function report(partial: Partial<EvalReport> = {}): EvalReport {
   return {
     k: 3,
     threshold: 0.45,
+    scoreScale: 'cosine',
     generatedAnswers: false,
     breakdown: { total: 0, answerable: 0, unanswerable: 0, byTag: {} },
     cases: [],

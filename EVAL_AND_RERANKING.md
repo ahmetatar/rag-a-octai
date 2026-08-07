@@ -121,9 +121,12 @@ is a prompting problem.
 > low; a fluent paraphrase of the *wrong* chunk scores high. Read it as a relative signal
 > across runs.
 
-The eval also mirrors production's `RETRIEVAL_THRESHOLD`, so it scores the chunks the model
-would really be given rather than ones production would have discarded. Sweep it with
-`EVAL_THRESHOLD` without touching the app config.
+The eval also mirrors production's threshold, so it scores the chunks the model would really
+be given rather than ones production would have discarded. Which threshold that is depends on
+the run: `RETRIEVAL_THRESHOLD` when scores are cosine similarities, `RERANK_THRESHOLD` when a
+reranker produced them. The report prints the scale it used, because "threshold 0.45" means
+two different things on the two scales. Sweep either with `EVAL_THRESHOLD` without touching the
+app config.
 
 The metric functions live in `src/core/rag/eval/metrics.ts` and are pure and unit-tested —
 you can trust the numbers.
@@ -240,29 +243,64 @@ RERANK_FETCH_K=10 \
 npm run eval
 ```
 
-On the current corpus the A/B looks like this:
+Note that the command sets no threshold. That is deliberate — see the box below.
 
-| Metric | Reranker OFF | Reranker ON |
+On the current corpus, each mode at **its own** configured threshold:
+
+| Metric | Reranker OFF (cosine ≥ 0.45) | Reranker ON (relevance ≥ 0.1) |
 |---|---|---|
-| P@k | 56.2% | **89.2%** |
-| R@k | **98.0%** | 91.2% |
-| MRR | **0.928** | 0.912 |
-| hitRate | **100.0%** | 92.2% |
-| snippetCoverage | **98.0%** | 89.2% |
-| falseRetrievalRate | 100.0% | **13.3%** |
-| retrieval latency | **17ms** | 1439ms |
+| P@k | 56.2% | **88.2%** |
+| R@k | 98.0% | **99.0%** |
+| MRR | 0.928 | **0.990** |
+| hitRate | 100.0% | 100.0% |
+| snippetCoverage | **98.0%** | 97.1% |
+| falseRetrievalRate | 100.0% | **33.3%** |
+| multi-source R@k | 80.0% | **90.0%** |
+| retrieval latency | **17ms** | 1449ms |
 
-**The reranker is not a free win — it buys precision with recall.** It reads each
-`(question, chunk)` pair properly, so it throws away the on-topic-but-useless chunks that made
-`falseRetrievalRate` 100%. But it is aggressive: average chunks kept drops from 2.92 to 1.14 on
-answerable questions, and in four cases it discards the correct document entirely. On the
-`multi-source` questions — the ones that need two documents — recall falls from 80% to 70%.
+The reranker wins on ranking outright — MRR 0.928 → 0.990 — and cuts false retrieval by two
+thirds, because it reads each `(question, chunk)` pair together where cosine similarity never
+does. It costs ~1.4 s per query, still under half of generation.
 
-**This is the whole point:** we didn't guess, we measured. And the measurement contradicted the
-earlier one taken on a three-chunk corpus, where the reranker looked free. Whether to enable it
-is a judgement about your traffic: if unanswerable questions dominate, the precision is worth
-the recall; if multi-document answers matter, tune the threshold first
-(see `docs/rag-improvements-task-list.md`, item 4).
+> ### The mistake this section used to make
+>
+> An earlier version of this table ran both modes at `0.45` and concluded that the reranker
+> *loses* recall (hitRate 100% → 92.2%). It does not. `0.45` is a **cosine** number; on the
+> cross-encoder's probability scale it is a far stricter cut, so the reranker was being asked
+> to discard almost everything. Sweeping its own scale:
+>
+> | Reranker threshold | hitRate | R@k | falseRetrievalRate | multi-source R@k |
+> |---|---|---|---|---|
+> | 0.05 | 100.0% | 100.0% | 66.7% | 100.0% |
+> | **0.10** | **100.0%** | 99.0% | 33.3% | 90.0% |
+> | 0.20 | 98.0% | 96.1% | 20.0% | 80.0% |
+> | 0.45 | 92.2% | 91.2% | 13.3% | 70.0% |
+>
+> The "cost" was entirely the units. This is why `RETRIEVAL_THRESHOLD` and `RERANK_THRESHOLD`
+> are separate settings, why the orchestrator picks between them based on what **actually
+> ran** (a reranker that throws leaves cosine scores behind), and why the query response
+> reports `scoreScale`. If you carry a tuned threshold from one mode to the other, you will
+> measure a units error and believe it is a quality result.
+
+### Step 4b — Does the embedding model matter?
+
+Same protocol, reranker off, each model at its own best operating point:
+
+| | bge-small (local GGUF, 36 MB) | nomic-embed-text (Ollama, 274 MB) |
+|---|---|---|
+| MRR | 0.928 | **0.944** |
+| snippetCoverage | **98.0%** | 97.1% |
+| multi-source R@k | 80.0% | **90.0%** |
+| score spread | narrow — thresholding barely bites | **wide — thresholding works** |
+
+nomic wins, and it is the shipped default. But the honest caveat is bigger than the result:
+**with the reranker on, the two models score identically** (P@k 88.2%, MRR 0.990, snippet 97.1%
+for both), and they stay within a point of each other even when the candidate pool is narrowed
+to `RERANK_FETCH_K=5`. With 21 chunks in the store the reranker sees nearly every candidate and
+overwrites the embedding's ranking entirely. So on this corpus the embedding choice is only
+measurable on the no-reranker path. That is "no difference detectable here", not "no
+difference" — telling embedding models apart needs a store large enough that the shortlist
+actually excludes something.
 
 ### Step 5 — Check the gates
 
@@ -407,7 +445,9 @@ retrieval-only and so is reported either way.
 | `RERANK_FETCH_K` | Candidates fetched before reranking down to `topK` | `20` |
 | `EVAL_COLLECTION` | ChromaDB collection the harness uses | `eval_harness` |
 | `EVAL_GENERATE` | Also generate answers and score answer/abstention metrics | `false` |
-| `EVAL_THRESHOLD` | Minimum score a chunk must reach; sweeps the cut without touching app config | `RETRIEVAL_THRESHOLD` |
+| `EVAL_THRESHOLD` | Minimum score a chunk must reach; sweeps the cut without touching app config | the scale's configured threshold |
+| `RETRIEVAL_THRESHOLD` | Minimum **cosine similarity**; applies when reranking did not run | `0.35` |
+| `RERANK_THRESHOLD` | Minimum **cross-encoder relevance**; applies when reranking ran | `0.1` |
 | `EVAL_GATE` | Exit non-zero when a threshold in `eval/gates.json` is missed | `false` |
 | `RAG_TOP_K` | Final number of chunks kept (`k` in the metrics) | `3` |
 
@@ -457,7 +497,8 @@ with no services running, so an edited document that invalidates a case fails im
 > retrieval, and it grades whether the right text came back and how highly it was ranked. Most
 > of the corpus describes a company that does not exist, so a right answer can only have come
 > from retrieval and not from the model's memory. The exam runs on every pull request and fails
-> the build when the deterministic scores drop. Having it first is what let us measure, rather
-> than guess, that our cross-encoder reranker trades recall for precision instead of being a
-> free improvement — which is the opposite of what we believed before we had a realistic
-> dataset.
+> the build when the deterministic scores drop. Having it first is what let us measure rather
+> than guess — including catching our own error: we first concluded the cross-encoder reranker
+> costs recall, then found we had been grading it with a threshold borrowed from a different
+> score scale. At its own threshold it beats plain vector search on every retrieval metric. An
+> eval you can re-run is what turns a confident wrong answer into a corrected one.

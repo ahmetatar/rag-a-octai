@@ -1,4 +1,5 @@
 import { ExpectedKeyword } from './metrics';
+import { ScoreScale } from '../rag-orchestrator';
 
 /**
  * One evaluation case: a question and what a correct system should retrieve/answer.
@@ -139,6 +140,12 @@ export interface EvalReport {
   k: number;
   /** The minimum score a chunk had to reach to be kept, mirroring production. */
   threshold: number;
+  /**
+   * Which scale that threshold was applied to. Two runs at "threshold 0.45" are not
+   * comparable unless this matches, so it is part of the report rather than something the
+   * reader has to remember about how the run was launched.
+   */
+  scoreScale: ScoreScale;
   /** Whether answers were generated (and answer metrics computed). */
   generatedAnswers: boolean;
   /** The answerable/unanswerable split of the dataset. */

@@ -7,6 +7,7 @@ import { createEmbedding } from '../embedding';
 import { FileInfo, resolveFileHandler } from '../file-handlers';
 import { RagDataIngestor } from '../ingestion';
 import { isAbstention, OllamaLangModelRunner } from '../llm';
+import { defaultThresholdFor, ScoreScale } from '../rag-orchestrator';
 import { Reranker } from '../reranking';
 import { ChromaVectorStore, SearchResult, VectorStore } from '../vector-store';
 import {
@@ -48,7 +49,8 @@ export interface RunEvalOptions {
   /**
    * Minimum score a chunk must reach to be kept, mirroring the orchestrator. Without it the
    * eval scores chunks production would have discarded, so its numbers describe a pipeline
-   * that does not exist. Defaults to the configured retrieval threshold.
+   * that does not exist. Defaults to the configured threshold for whichever score scale the
+   * run produces — cosine without a reranker, cross-encoder relevance with one.
    */
   threshold?: number;
 }
@@ -81,7 +83,10 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
     ? new OllamaLangModelRunner(config.generationModel, config.ollamaHost)
     : undefined;
 
-  const threshold = options.threshold ?? config.retrievalThreshold;
+  // The eval's scale is fixed for the whole run: unlike a live query, a reranker that is
+  // configured here is loaded up front and either works for every case or fails the run.
+  const scoreScale: ScoreScale = options.reranker ? 'reranker' : 'cosine';
+  const threshold = options.threshold ?? defaultThresholdFor(scoreScale);
   const results: EvalCaseResult[] = [];
   for (const evalCase of cases) {
     results.push(await scoreCase(evalCase, options, threshold, embedding, store, langModel));
@@ -90,6 +95,7 @@ export async function runEval(options: RunEvalOptions): Promise<EvalReport> {
   return {
     k: options.topK,
     threshold,
+    scoreScale,
     generatedAnswers: options.generateAnswers,
     breakdown: {
       total: results.length,

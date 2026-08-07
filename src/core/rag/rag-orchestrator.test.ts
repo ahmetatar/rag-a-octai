@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import config from '@app/config';
 import { RagOrchestrator } from './rag-orchestrator';
 import { BaseEmbedding } from './embedding';
 import { ABSTENTION_MESSAGE, LangModelBase, NO_ANSWER_SENTINEL, PromptContext } from './llm';
@@ -162,11 +163,26 @@ describe('RagOrchestrator.query', () => {
     expect(answer.sources).toHaveLength(1);
   });
 
-  it('treats a missing threshold as "keep everything"', async () => {
+  // Without a reranker the scores are cosine similarities, so an omitted threshold has to
+  // fall back to the cosine default rather than to some other stage's number.
+  it('falls back to the cosine threshold when none is given', async () => {
     const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH]);
 
     const answer = await orchestrator.query('question?', 3);
 
+    expect(answer.scoreScale).toBe('cosine');
+    expect(answer.threshold).toBe(config.retrievalThreshold);
+    // CLOSE_MATCH scores 0.88 and DISTANT_MATCH 0.15, so only the close one can survive any
+    // sensible cosine default.
+    expect(answer.sources.map((source) => source.id)).toEqual(['chunk-close']);
+  });
+
+  it('lets an explicit threshold override the configured default', async () => {
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH]);
+
+    const answer = await orchestrator.query('question?', 3, 0);
+
+    expect(answer.threshold).toBe(0);
     expect(answer.sources).toHaveLength(2);
   });
 
@@ -242,12 +258,7 @@ describe('RagOrchestrator.query — reranking', () => {
   });
 
   it('falls back to vector order when the reranker throws', async () => {
-    const failing = new (class extends Reranker {
-      async rank(): Promise<number[]> {
-        throw new Error('reranker down');
-      }
-    })();
-    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], failing);
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], failingReranker());
 
     const answer = await orchestrator.query('question?', 2, 0);
 
@@ -255,3 +266,46 @@ describe('RagOrchestrator.query — reranking', () => {
     expect(answer.sources.map((source) => source.id)).toEqual(['chunk-close', 'chunk-distant']);
   });
 });
+
+describe('RagOrchestrator.query — score scales', () => {
+  // A cosine similarity of 0.45 and a cross-encoder score of 0.45 do not mean the same thing,
+  // so each stage needs its own default. Sharing one made enabling the reranker silently
+  // change how strict the filter was.
+  it('uses the reranker threshold when reranking ran', async () => {
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH], new ScriptedReranker({ [CLOSE_MATCH.content]: 0.5 }));
+
+    const answer = await orchestrator.query('question?', 3);
+
+    expect(answer.scoreScale).toBe('reranker');
+    expect(answer.threshold).toBe(config.rerankThreshold);
+  });
+
+  // The critical case: the reranker is configured, so the cross-encoder threshold "should"
+  // apply — but it failed, and the scores left behind are cosine ones. Filtering those by the
+  // cross-encoder's number would apply the wrong units at the worst possible moment.
+  it('reverts to the cosine threshold when reranking was configured but failed', async () => {
+    const { orchestrator } = orchestratorOver([CLOSE_MATCH, DISTANT_MATCH], failingReranker());
+
+    const answer = await orchestrator.query('question?', 3);
+
+    expect(answer.scoreScale).toBe('cosine');
+    expect(answer.threshold).toBe(config.retrievalThreshold);
+  });
+
+  it('reports the cosine scale when there are no candidates to rerank', async () => {
+    const { orchestrator } = orchestratorOver([], new ScriptedReranker({}));
+
+    const answer = await orchestrator.query('question?', 3);
+
+    expect(answer.scoreScale).toBe('cosine');
+  });
+});
+
+/** A reranker that always fails, for the graceful-degradation cases. */
+function failingReranker(): Reranker {
+  return new (class extends Reranker {
+    async rank(): Promise<number[]> {
+      throw new Error('reranker down');
+    }
+  })();
+}

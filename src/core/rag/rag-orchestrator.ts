@@ -26,6 +26,15 @@ export interface RagSource {
 }
 
 /**
+ * Which scoring stage produced the `score` on a {@link RagSource}.
+ *
+ * `cosine` is embedding-space similarity in [-1, 1]; `reranker` is a cross-encoder relevance
+ * probability in [0, 1]. They are not comparable, so a caller that stores or thresholds a
+ * score needs to know which one it has.
+ */
+export type ScoreScale = 'cosine' | 'reranker';
+
+/**
  * The result of a RAG query: the generated answer plus the chunks it was based on.
  */
 export interface RagAnswer {
@@ -39,6 +48,13 @@ export interface RagAnswer {
    * the difference between a grounded miss and an ungrounded guess.
    */
   abstained: boolean;
+  /**
+   * The scale the `score` on each source is on. Reranking degrades to vector order on
+   * failure, so this reports what actually happened rather than what was configured.
+   */
+  scoreScale: ScoreScale;
+  /** The minimum score a chunk had to reach, on that scale. */
+  threshold: number;
 }
 
 /**
@@ -74,7 +90,8 @@ export class RagOrchestrator {
    * Handles a query by retrieving documents and generating a response
    * @param query The input query string
    * @param topK The number of top documents to retrieve
-   * @param threshold Optional MINIMUM similarity score a document must reach to be used
+   * @param threshold Optional MINIMUM score a document must reach to be used. Left undefined,
+   * the scale-appropriate configured default is used — see {@link ScoreScale}.
    * @param maxTokens Optional maximum number of tokens for the response
    * @param tenantId Optional tenant whose documents the search is restricted to
    * @returns The generated answer together with the sources it was based on
@@ -94,14 +111,19 @@ export class RagOrchestrator {
     const candidates = await this.store.search(queryEmbedding[0], fetchK, tenantId);
 
     //3. Rerank the candidates (cross-encoder) and keep the best top-K, or use vector order.
-    const results = (await this.rerank(query, candidates)).slice(0, topK);
+    const reranked = await this.rerank(query, candidates);
+    const results = reranked.results.slice(0, topK);
 
-    //4. (Optional) Keep only the documents that are relevant ENOUGH to the query
-    const minScore = threshold ?? 0;
+    //4. Keep only the documents that are relevant ENOUGH to the query, on the scale the
+    //   scores are actually on. `reranked.scale` reports what ran, not what was configured:
+    //   reranking degrades to vector order on failure, and applying the cross-encoder's
+    //   threshold to cosine scores would then silently change how strict the filter is.
+    const scoreScale = reranked.scale;
+    const minScore = threshold ?? defaultThresholdFor(scoreScale);
     const filteredResults = results.filter((result) => result.score >= minScore);
 
     logger.info(
-      `Retrieved ${candidates.length} candidate(s), reranked=${Boolean(this.reranker)}, ` +
+      `Retrieved ${candidates.length} candidate(s), scale=${scoreScale}, ` +
         `${filteredResults.length}/${results.length} kept at or above score ${minScore}` +
         `${results.length ? ` (best: ${results[0].score.toFixed(3)})` : ''}.`
     );
@@ -128,6 +150,8 @@ export class RagOrchestrator {
       response: presentAnswer(rawResponse),
       sources: abstained ? [] : filteredResults.map(toRagSource),
       abstained,
+      scoreScale,
+      threshold: minScore,
     };
   }
 
@@ -137,26 +161,49 @@ export class RagOrchestrator {
    * similarity order) when no reranker is configured or if reranking fails — a reranker
    * problem should degrade to plain vector search, not fail the query.
    *
+   * Reports the scale the returned scores are on, because the caller thresholds them and the
+   * two scales are not interchangeable. It has to be what happened, not what was configured:
+   * a reranker that throws leaves cosine scores behind.
+   *
    * @param query The user query.
    * @param candidates The vector-search candidates.
-   * @returns The results ordered best-first.
+   * @returns The results ordered best-first, and the scale their scores are on.
    */
-  private async rerank(query: string, candidates: SearchResult[]): Promise<SearchResult[]> {
+  private async rerank(query: string, candidates: SearchResult[]): Promise<RerankOutcome> {
     if (!this.reranker || candidates.length === 0) {
-      return candidates;
+      return { results: candidates, scale: 'cosine' };
     }
 
     try {
       const scores = await this.reranker.rank(query, candidates.map((candidate) => candidate.content));
 
-      return candidates
-        .map((candidate, index) => ({ ...candidate, score: scores[index] ?? 0 }))
-        .sort((a, b) => b.score - a.score);
+      return {
+        results: candidates
+          .map((candidate, index) => ({ ...candidate, score: scores[index] ?? 0 }))
+          .sort((a, b) => b.score - a.score),
+        scale: 'reranker',
+      };
     } catch (error) {
       logger.warn(`Reranking failed, falling back to vector order: ${error instanceof Error ? error.message : error}`);
-      return candidates;
+      return { results: candidates, scale: 'cosine' };
     }
   }
+}
+
+/**
+ * What reranking produced: the ordered results and the scale their scores are on.
+ */
+interface RerankOutcome {
+  results: SearchResult[];
+  scale: ScoreScale;
+}
+
+/**
+ * The configured threshold for a score scale.
+ * @param scale The scale the scores being filtered are on.
+ */
+export function defaultThresholdFor(scale: ScoreScale): number {
+  return scale === 'reranker' ? config.rerankThreshold : config.retrievalThreshold;
 }
 
 /**

@@ -89,8 +89,26 @@ export default {
   readinessTimeoutMs: process.env.READINESS_TIMEOUT_MS ? parseInt(process.env.READINESS_TIMEOUT_MS) : 3_000,
   /** Retry attempts for a failed external call (Ollama/Chroma) */
   externalRetryAttempts: process.env.EXTERNAL_RETRY_ATTEMPTS ? parseInt(process.env.EXTERNAL_RETRY_ATTEMPTS) : 3,
-  /** Retrieval similarity threshold */
+  /**
+   * Minimum COSINE SIMILARITY a chunk must reach to be kept, in [-1, 1]. Applies when the
+   * results being filtered are in vector-search order — that is, whenever reranking did not
+   * actually run.
+   */
   retrievalThreshold: process.env.RETRIEVAL_THRESHOLD ? parseFloat(process.env.RETRIEVAL_THRESHOLD) : 0.35,
+  /**
+   * Minimum CROSS-ENCODER RELEVANCE a chunk must reach to be kept, in [0, 1]. Applies only
+   * when reranking actually ran.
+   *
+   * Separate from `retrievalThreshold` because the two numbers grade different things. A
+   * cosine similarity of 0.45 means "reasonably close in embedding space"; a cross-encoder
+   * score of 0.45 means "the model is 45% confident this chunk answers the question". Feeding
+   * one number to both stages made turning the reranker on silently change how strict the
+   * filter was, which is how a measured improvement can turn out to be a units error.
+   */
+  rerankThreshold: process.env.RERANK_THRESHOLD ? parseFloat(process.env.RERANK_THRESHOLD) : 0.1,
+  // 0.1 is where the eval set's knee is: hit rate stays at 100%, recall at 99%, and false
+  // retrieval falls from 100% to 33%. Raising it to 0.2 halves false retrieval again but
+  // starts costing multi-document questions their second source.
   /**
    * Allowed CORS origins, comma-separated. Empty disables CORS entirely (same-origin only),
    * '*' allows any origin. Defaults to disabled — an API with no browser client needs no CORS.

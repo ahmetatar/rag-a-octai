@@ -150,6 +150,11 @@ sıfır noktası.
 
 ### Reranker A/B — gerçekçi sette sonuç tersine döndü
 
+> ⚠️ **Bu bölümdeki sonuç 4. maddede geçersiz çıktı.** Aşağıdaki A/B, reranker'ı kosinüs
+> ölçeğinden ödünç alınan `0.45` eşiğiyle ölçüyor — yani tam olarak 2. maddedeki 1 numaralı
+> uyarının tarif ettiği hata. Kendi ölçeğindeki doğru eşikte (`0.1`) reranker recall
+> kaybetmiyor; her retrieval metriğinde kosinüsü yeniyor. Doğru tablo 4. maddede.
+
 2. maddedeki A/B, üç chunk'lık corpus'ta reranker'ı bedava kazanç gibi göstermişti. 21 chunk ve
 gerçek distractor'lar ile tablo değişiyor:
 
@@ -170,13 +175,16 @@ Ortalama tutulan chunk sayısı mekanizmayı gösteriyor:
 | Reranker OFF | 2.92 chunk | 2.60 chunk |
 | Reranker ON | 1.14 chunk | 0.13 chunk |
 
-**Reranker artık bedava değil: precision'ı recall ile satın alıyor.** Dört vakada doğru belge
-tamamen düşüyor (`spec-bronze-query-timespan`, `adr-storage-cost-consequence`,
-`handbook-deploy-window`, `multi-sev1-page-and-sla`) ve `multi-source` recall %80 → %70'e
-geriliyor. 2. maddedeki "reranker açık kullanılsın" önerisi bu yüzden **koşullu**: cevapsız
-soruların çokluğu recall kaybına değiyorsa evet, ama eşik ayarı (4. madde) yapılmadan önce
-varsayılan olarak açılmamalı. 2. maddedeki 2 numaralı uyarı (tutulan chunk sayısının 1'e düşmesi)
-böylece **doğrulandı**.
+~~**Reranker artık bedava değil: precision'ı recall ile satın alıyor.**~~ Bu yorum yanlıştı ve
+sebebi 2. maddedeki 1 numaralı uyarının ta kendisi: yukarıdaki `0.45`, kosinüs ölçeğine ait bir
+sayı ve cross-encoder olasılığına uygulanınca çok fazla chunk kesiyor. 4. maddede kendi ölçeğinde
+süpürüldüğünde reranker `0.1`'de hiç recall kaybetmiyor (hit %100, multi-source recall %90) —
+yani kayıp reranker'ın değil, eşiğin. Doğru tablo 4. maddede.
+
+Yine de bu koşumdan geçerli kalan bir şey var: **reranker agresif keser.** `0.45`'te
+cevaplanabilir sorularda ortalama 1.14 chunk tutuyor ve dört vakada doğru belgeyi tamamen
+düşürüyor. 2. maddedeki 2 numaralı uyarı (tutulan chunk sayısının düşmesi) bu anlamda
+**doğrulandı** — ama sonucu eşikle yönetilebilir bir davranış, kalıcı bir kayıp değil.
 
 ### CI
 
@@ -192,8 +200,8 @@ böylece **doğrulandı**.
 
 ## 4. Retrieval kalitesi: embedding, chunking, query
 
-- [ ] **`RETRIEVAL_THRESHOLD`'u skor ölçeğinden bağımsız hâle getir.** Aynı eşik hem kosinüs benzerliğine hem cross-encoder olasılığına uygulanıyor; reranker'ı açmak eşiğin anlamını sessizce değiştiriyor (2. maddedeki A/B'den çıktı). Ya moda göre ayrı eşik, ya skor normalizasyonu.
-- [ ] **Embedding modeli karşılaştırması yap.** Retrieval kalitesinde tek en büyük kaldıraç bu ve repo'da üç sağlayıcı hazır (`gemini`, `ollama`, `llama`). Türkçe/çok dilli içerik hedefleniyorsa çok dilli model karşılaştırması, chunking deneylerinden daha yüksek getirili.
+- [x] **`RETRIEVAL_THRESHOLD`'u skor ölçeğinden bağımsız hâle getir.** Ayrı eşik seçildi: `RETRIEVAL_THRESHOLD` kosinüs benzerliğini, yeni `RERANK_THRESHOLD` cross-encoder olasılığını derecelendiriyor. Normalizasyon değil ayrı eşik, çünkü iki skor farklı şeyleri ölçüyor — birini diğerine haritalamak uydurma bir denklik yaratırdı. Orchestrator hangi eşiği uygulayacağını **reranker'ın gerçekten çalışıp çalışmadığına** göre seçiyor (yapılandırıldığına göre değil): reranker hata alıp vector order'a düştüğünde geride kosinüs skorları kalıyor, oraya cross-encoder eşiğini uygulamak sessizce yanlış birim olurdu. `/query` yanıtı artık hangi ölçekte olduğunu `scoreScale` ile bildiriyor.
+- [x] **Embedding modeli karşılaştırması yap.** bge-small (yerel GGUF) vs nomic-embed-text (Ollama), her biri kendi eşik süpürmesiyle. Sonuç ve — daha önemlisi — sonucun sınırı aşağıda.
 - [x] Reranker açıkken cevaplanabilir sorularda tutulan chunk sayısının 1.00'e düşmesini çok kaynaklı vakalarla sına (2. maddeden devreden uyarı). **Doğrulandı**: 3. maddedeki A/B'de reranker cevaplanabilir sorularda ortalama 1.14 chunk tutuyor ve dört vakada doğru belgeyi tamamen düşürüyor. Kalan iş bu maddede: eşiği reranker moduna göre ayarlamak ve `topK`'yi çok kaynaklı sorular için yeniden değerlendirmek.
 - [ ] Karakter yerine token odaklı chunk boyutlarını değerlendirme altyapısına ekle.
 - [ ] Chunk boyutu × overlap ızgarasını eval setinde tara (2. maddedeki düzeltmenin üstüne ince ayar).
@@ -201,7 +209,101 @@ böylece **doğrulandı**.
 - [ ] Chunk metnine gerektiğinde bölüm bağlamı ekle.
 - [ ] PDF'lerde sayfa bazlı bölme ile genel PDF handler kullanımını netleştir.
 - [ ] **Query tarafı iyileştirmelerini değerlendir**: query rewriting, multi-query, HyDE. Liste bu noktaya kadar tamamen ingestion odaklı; sorgu tarafı ölçülmeden bırakılmamalı.
-- [ ] Farklı stratejileri eval sonuçlarıyla karşılaştır ve kazananı gerekçesiyle kaydet.
+- [ ] Farklı stratejileri eval sonuçlarıyla karşılaştır ve kazananı gerekçesiyle kaydet. (Eşik ve embedding için yapıldı — aşağıya bakın; chunking ve query stratejileri için açık.)
+
+### Eşik süpürmesi: kosinüs eşiği zayıf bir alet
+
+66 vaka, k=3, reranker kapalı. Her satır ayrı bir tam koşum:
+
+| Eşik | bge P@k | bge hit | bge falseRetr | nomic P@k | nomic hit | nomic falseRetr |
+|---|---|---|---|---|---|---|
+| 0.35 (varsayılan) | 53.6% | 100.0% | 100.0% | 54.2% | 100.0% | 100.0% |
+| 0.45 | 56.2% | 100.0% | 100.0% | 57.2% | 100.0% | 100.0% |
+| 0.50 | 58.8% | 100.0% | 93.3% | 62.1% | 100.0% | 93.3% |
+| 0.55 | 61.8% | 98.0% | 86.7% | 68.3% | 96.1% | 93.3% |
+| 0.60 | 65.7% | 98.0% | 86.7% | 69.0% | 86.3% | 60.0% |
+| 0.65 | – | – | – | 65.4% | 72.5% | 33.3% |
+
+**Varsayılan `0.35` fiilen hiçbir şey yapmıyor** — tüm skor bandının altında. Ve daha önemlisi:
+hiçbir kosinüs eşiği, recall'u yıkmadan false retrieval'ı anlamlı biçimde kesemiyor. bge'de
+%60 eşikte bile 15 cevapsız sorunun 13'ü hâlâ chunk getiriyor; nomic'te %33'e inmek hit
+rate'in %72.5'e düşmesine mal oluyor. **Kosinüs skoru "yakın" ile "cevabı taşıyor"u ayırt
+etmiyor.** Varsayılan yine de değiştirilmedi: kazanç marjinal ve modele bağlı, asıl kaldıraç
+aşağıda.
+
+### Cross-encoder eşiği: 3. maddedeki sonucu geçersiz kılıyor
+
+Aynı set, bge-small + reranker, kendi ölçeğinde süpürüldü:
+
+| Eşik | P@k | R@k | MRR | hit | snippet | falseRetr | multi-source R@k |
+|---|---|---|---|---|---|---|---|
+| 0.02 | 81.4% | **100.0%** | **0.990** | **100.0%** | **98.0%** | 80.0% | **100.0%** |
+| 0.05 | 84.6% | **100.0%** | **0.990** | **100.0%** | **98.0%** | 66.7% | **100.0%** |
+| **0.10** | 88.2% | 99.0% | **0.990** | **100.0%** | 97.1% | 33.3% | 90.0% |
+| 0.20 | 91.2% | 96.1% | 0.971 | 98.0% | 94.1% | 20.0% | 80.0% |
+| 0.45 | 89.2% | 91.2% | 0.912 | 92.2% | 89.2% | 13.3% | 70.0% |
+
+3. maddede reranker'ı `0.45`'te ölçmüştüm — kosinüs ölçeğinden ödünç alınmış bir sayı. Tablonun
+son satırı o koşum. **"Reranker precision'ı recall ile satın alıyor" sonucu bir eşik
+artefaktıymış.** Kendi ölçeğinde `0.1`'de reranker, kosinüs baseline'ını **her** retrieval
+metriğinde yeniyor:
+
+| | kosinüs @0.45 | reranker @0.1 |
+|---|---|---|
+| P@k | 56.2% | **88.2%** |
+| R@k | 98.0% | **99.0%** |
+| MRR | 0.928 | **0.990** |
+| hit | 100.0% | 100.0% |
+| snippet | **98.0%** | 97.1% |
+| falseRetrievalRate | 100.0% | **33.3%** |
+| multi-source R@k | 80.0% | **90.0%** |
+
+`RERANK_THRESHOLD` varsayılanı bu yüzden **0.1**: hit rate tam, recall neredeyse tam, false
+retrieval üçte birine iniyor. Daha agresif eşik isteyen (cevapsız trafiğin baskın olduğu
+kurulum) 0.2'ye çıkabilir, bedeli multi-source recall.
+
+Bu aynı zamanda 2. maddedeki 1 numaralı uyarının doğrulanması: o A/B'deki `falseRetrievalRate`
+kazancının **tamamı** ölçek artefaktıydı.
+
+### Embedding karşılaştırması: kazanan var, ama dar bir koşulda
+
+Reranker **kapalıyken**, her model kendi en iyi çalışma noktasında:
+
+| | bge-small (yerel GGUF, 36 MB) | nomic-embed-text (Ollama, 274 MB) |
+|---|---|---|
+| MRR | 0.928 | **0.944** |
+| hit | 100.0% | 100.0% |
+| snippet | **98.0%** | 97.1% |
+| multi-source R@k | 80.0% | **90.0%** |
+| skor dağılımı | dar (eşik işe yaramıyor) | **geniş (eşik ayarlanabilir)** |
+| retrieval latency | **~19ms** (in-process) | ~25ms (HTTP) |
+
+**nomic-embed-text kazanıyor** — MRR ve çok kaynaklı recall'da önde, ve skorları eşik
+ayarlanabilecek kadar yayılıyor. Repo varsayılanı zaten bu, yani karar mevcut varsayılanı
+doğruluyor.
+
+**Ama sonucun sınırı şu:** reranker açıkken iki model **birebir aynı** sonucu veriyor
+(P@k 88.2%, MRR 0.990, snippet 97.1% — her ikisi için de). Aday havuzunu `fetchK=5`'e daraltıp
+tekrar denedim, fark yine ihmal edilebilir (P@k 89.2% vs 90.2%). Sebep: 21 chunk'lık store'da
+reranker aday havuzunun neredeyse tamamını görüyor ve embedding'in sıralamasını tamamen eziyor.
+Yani **embedding seçimi yalnızca reranker'sız yolda ölçülebiliyor**; önerilen konfigürasyonda
+(reranker açık) bu corpus embedding modelleri arasında ayrım yapamıyor. "Fark yok" değil,
+"bu sette fark ölçülemez" — gerçek bir ayrım için daha büyük bir store gerekiyor.
+
+Yan bulgu: `fetchK` 20 → 5 düşünce yalnızca multi-source recall %90 → %80 geriliyor, gerisi
+sabit. 2. maddede ölçülemez denen `rerankFetchK` A/B'si böylece kısmen yanıtlandı: bu boyutta
+etkisi küçük ama sıfır değil.
+
+### Önerilen konfigürasyon
+
+```
+EMBEDDING_PROVIDER=ollama
+EMBEDDING_MODEL=nomic-embed-text
+RERANK_ENABLED=true
+RERANK_MODEL_PATH=./models/hf_gpustack_bge-reranker-v2-m3.Q4_K_M.gguf
+RERANK_THRESHOLD=0.1
+RETRIEVAL_THRESHOLD=0.5     # reranker devre dışı kalırsa geçerli olan yedek
+```
 
 Kabul kriteri: En iyi konfigürasyon eval setinde baseline'a göre retrieval metriklerini korur veya iyileştirir; chunk tek başına okunabilir kalır; latency/maliyet regresyonu kabul edilebilir sınırda.
 

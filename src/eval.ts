@@ -41,8 +41,9 @@ async function main(): Promise<void> {
     generateAnswers: process.env.EVAL_GENERATE === 'true',
     reranker,
     fetchK: config.rerankFetchK,
-    // Mirrors production's cut by default; EVAL_THRESHOLD sweeps it without touching the app.
-    threshold: process.env.EVAL_THRESHOLD ? parseFloat(process.env.EVAL_THRESHOLD) : config.retrievalThreshold,
+    // Left undefined by default so the runner picks the threshold for the score scale this
+    // run actually produces; EVAL_THRESHOLD sweeps it without touching the app config.
+    threshold: process.env.EVAL_THRESHOLD ? parseFloat(process.env.EVAL_THRESHOLD) : undefined,
   });
 
   logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
@@ -78,7 +79,10 @@ function printReport(report: EvalReport): void {
   // every other row out of its column.
   const idWidth = Math.max(2, ...report.cases.map((c) => c.id.length));
 
-  logger.info(`\nEvaluation (k=${report.k}, threshold=${report.threshold}, ${breakdown.total} cases)`);
+  logger.info(
+    `\nEvaluation (k=${report.k}, threshold=${report.threshold} on the ${report.scoreScale} scale, ` +
+      `${breakdown.total} cases)`
+  );
   logger.info(`Cases: ${breakdown.answerable} answerable, ${breakdown.unanswerable} unanswerable`);
   logger.info(`${'id'.padEnd(idWidth)}  ans    P@k    R@k     RR    hit   snip  absOK   gnd`);
   for (const c of report.cases) {

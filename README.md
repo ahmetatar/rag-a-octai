@@ -9,7 +9,7 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
 - 🔍 **Semantic Search** - Vector retrieval behind a pluggable `VectorStore` interface
   (ChromaDB today, cosine space; see [ADR 0001](docs/adr/0001-vector-store-abstraction-and-backend-strategy.md))
 - 🎯 **Cross-Encoder Reranking** - Optional local reranker that reorders candidates by true
-  relevance (measured: precision 56% → 89%, at a cost in recall). See
+  relevance (measured: MRR 0.928 → 0.990, precision 56% → 88%). See
   [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
 - 🤖 **AI-Powered Responses** - Ollama, local llama.cpp, or Gemini; answers include cited sources
 - ⚡ **Async Ingestion** - Non-blocking uploads via a BullMQ + Redis job queue (`202` + job id)
@@ -311,7 +311,8 @@ curl http://localhost:3000/metrics
 | `RAG_TOP_K` | Number of documents to retrieve | `3` |
 | `RAG_MAX_TOP_K` | Upper bound a request may ask for via `topK` | `50` |
 | `MAX_QUERY_LENGTH` | Maximum query length in characters | `2000` |
-| `RETRIEVAL_THRESHOLD` | Minimum similarity score, higher is stricter (range `[-1, 1]`) | `0.35` |
+| `RETRIEVAL_THRESHOLD` | Minimum **cosine similarity** a chunk must reach; applies when reranking did not run (range `[-1, 1]`) | `0.35` |
+| `RERANK_THRESHOLD` | Minimum **cross-encoder relevance**; applies when reranking ran (range `[0, 1]`) | `0.1` |
 | `RERANK_ENABLED` | Rerank vector-search candidates with a cross-encoder before top-K | `false` |
 | `RERANK_MODEL_PATH` | Path to a GGUF reranker model (e.g. bge-reranker) | - |
 | `RERANK_FETCH_K` | Candidates fetched from vector search before reranking to top-K | `20` |
@@ -362,28 +363,29 @@ npm run eval
 RERANK_ENABLED=true RERANK_MODEL_PATH=./models/<reranker>.gguf npm run eval
 ```
 
-**Reranking is a trade, not a free win.** It defaults to off because it needs a GGUF model on
-disk *and* because it costs recall. Measured on the shipped 66-case eval set (bge-small
-embeddings, k=3, threshold 0.45):
+**Reranking is recommended**, at its own threshold. It defaults to off only because it needs a
+GGUF model on disk. Measured on the shipped 66-case eval set (bge-small embeddings, k=3), each
+mode at its own configured threshold:
 
-| Metric | Reranker off | Reranker on |
+| Metric | Reranker off (cosine ≥ 0.45) | Reranker on (relevance ≥ 0.1) |
 |---|---|---|
-| precision@k | 56.2% | **89.2%** |
-| recall@k | **98.0%** | 91.2% |
-| hit rate | **100.0%** | 92.2% |
-| snippet coverage | **98.0%** | 89.2% |
-| false retrieval rate | 100.0% | **13.3%** |
-| retrieval latency | **17 ms** | 1439 ms |
+| precision@k | 56.2% | **88.2%** |
+| recall@k | 98.0% | **99.0%** |
+| MRR | 0.928 | **0.990** |
+| hit rate | 100.0% | 100.0% |
+| snippet coverage | **98.0%** | 97.1% |
+| false retrieval rate | 100.0% | **33.3%** |
+| retrieval latency | **17 ms** | 1449 ms |
 
-The cross-encoder stops questions the corpus cannot answer from pulling back
-on-topic-but-irrelevant chunks — false retrieval drops from 100% to 13%. But it keeps only 1.14
-chunks per answerable question (down from 2.92), so it also discards correct documents:
-multi-document questions lose 10 points of recall. Enable it if unanswerable queries dominate
-your traffic; tune `RETRIEVAL_THRESHOLD` first if multi-document answers matter.
+The cross-encoder improves ranking outright and cuts false retrieval by two thirds, for ~1.4 s
+of latency per query (still under half of generation). It reads each `(question, chunk)` pair
+together, which cosine similarity never does.
 
-Note that `RETRIEVAL_THRESHOLD` is applied to whichever score is current — cosine similarity
-without a reranker, the cross-encoder's relevance score with one — so the same number is not
-equally strict in both modes. Re-tune it when you switch.
+**The two thresholds are separate on purpose.** `RETRIEVAL_THRESHOLD` grades cosine similarity;
+`RERANK_THRESHOLD` grades cross-encoder relevance. They are different scales, and applying one
+number to both is a units error: measured at cosine's 0.45, the reranker appeared to *lose*
+recall (hit rate 92.2%), while at its own 0.1 it loses none. If you tune one, do not assume the
+other transfers.
 
 The eval also runs in CI: `ci.yml` fails a pull request when the deterministic retrieval
 metrics fall below `eval/gates.json`, while the full run including generation is nightly and
