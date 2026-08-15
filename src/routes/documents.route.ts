@@ -1,7 +1,7 @@
 import express from 'express';
 import config from '@app/config';
 import { ChromaVectorStore, VectorStore } from '@core/rag/vector-store';
-import { tenantOf } from '@infrastructure/http';
+import { requireScope, tenantOf } from '@infrastructure/http';
 import { logger } from '@infrastructure/logging';
 
 const router = express.Router();
@@ -20,7 +20,7 @@ const store: VectorStore = new ChromaVectorStore(config.chromaHost, config.chrom
  * - 401 when auth is enabled and no valid key is given.
  * - 500 on an internal error; the cause is logged, never returned.
  */
-router.get('/', async (_req, res) => {
+router.get('/', requireScope('read'), async (_req, res) => {
   try {
     const documents = await store.listSources(tenantOf(res.locals));
     res.json({ documents });
@@ -43,7 +43,7 @@ router.get('/', async (_req, res) => {
  * - 401 when auth is enabled and no valid key is given.
  * - 500 on an internal error; the cause is logged, never returned.
  */
-router.delete('/:source', async (req, res) => {
+router.delete('/:source', requireScope('delete'), async (req, res) => {
   const { source } = req.params;
   const tenantId = tenantOf(res.locals);
 

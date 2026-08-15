@@ -1,7 +1,7 @@
 import { createRagOrchestrator } from '@core/rag';
 import { logger } from '@infrastructure/logging';
 import { lazySingleton } from '@infrastructure/async';
-import { tenantOf } from '@infrastructure/http';
+import { requireScope, tenantOf } from '@infrastructure/http';
 import express from 'express';
 import { z } from 'zod';
 import config from '@app/config';
@@ -57,7 +57,7 @@ const queryRequestSchema = z.object({
  * Sample curl command:
  * curl -X POST http://localhost:3000/query -H "Content-Type: application/json" -d '{"query": "What is the capital of France?"}'
  */
-router.post('/', async (req, res) => {
+router.post('/', requireScope('read'), async (req, res) => {
   const parsed = queryRequestSchema.safeParse(req.body);
 
   if (!parsed.success) {

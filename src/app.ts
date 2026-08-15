@@ -5,7 +5,7 @@ import rateLimit from 'express-rate-limit';
 import config from '@app/config';
 import * as routes from '@routes/index';
 import { registerFileHandlers, createTextFileHandler, createPdfPageFileHandler, createHtmlFileHandler } from '@core/rag';
-import { authMiddleware, errorHandler, notFoundHandler } from '@infrastructure/http';
+import { authMiddleware, errorHandler, notFoundHandler, tenantOf } from '@infrastructure/http';
 import { correlationIdMiddleware, metricsMiddleware, metricsHandler } from '@infrastructure/observability';
 
 /**
@@ -34,6 +34,27 @@ function corsMiddleware(): RequestHandler {
 
   const origin = config.corsOrigins.includes('*') ? true : config.corsOrigins;
   return cors({ origin });
+}
+
+/**
+ * Builds a rate limiter keyed by tenant id instead of IP, so tenants sharing an egress IP
+ * (corporate NAT, VPN) don't share one budget, and a tenant can't dodge the limit by
+ * spreading requests across multiple IPs. Must run after `authMiddleware()`, which resolves
+ * the tenant into `res.locals`.
+ *
+ * One instance is shared across all three data routers (/ingest, /query, /documents) so the
+ * quota is per tenant across the whole API, not per tenant per route.
+ * @returns The tenant-scoped rate limiter middleware.
+ */
+export function tenantRateLimitMiddleware(): RequestHandler {
+  return rateLimit({
+    windowMs: config.rateLimitWindowMs,
+    limit: config.rateLimitMax,
+    standardHeaders: 'draft-7',
+    legacyHeaders: false,
+    keyGenerator: (_req, res) => tenantOf(res.locals),
+    message: { status: 'error', message: 'Too many requests, please try again later.' },
+  });
 }
 
 /**
@@ -81,11 +102,14 @@ export function createApp(): Express {
   app.get('/metrics', metricsHandler);
 
   // /health stays unauthenticated so liveness/readiness probes work without a key. The data
-  // routes sit behind auth, which also resolves the request's tenant.
+  // routes sit behind auth, which also resolves the request's tenant; the tenant rate limiter
+  // runs right after so it can key on that resolved tenant. One shared instance means the
+  // quota is per tenant across all three routes, not per tenant per route.
+  const tenantRateLimit = tenantRateLimitMiddleware();
   app.use('/health', routes.healthRouter);
-  app.use('/ingest', authMiddleware(), routes.ingestionRouter);
-  app.use('/query', authMiddleware(), routes.queryRouter);
-  app.use('/documents', authMiddleware(), routes.documentsRouter);
+  app.use('/ingest', authMiddleware(), tenantRateLimit, routes.ingestionRouter);
+  app.use('/query', authMiddleware(), tenantRateLimit, routes.queryRouter);
+  app.use('/documents', authMiddleware(), tenantRateLimit, routes.documentsRouter);
 
   // Both must stay last: Express matches middleware in registration order, so a route
   // registered after them would never be reached.

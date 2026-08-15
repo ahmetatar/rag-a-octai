@@ -12,7 +12,7 @@ import {
   isMimeTypeSupported,
 } from '@core/rag';
 import { logger } from '@infrastructure/logging';
-import { tenantOf } from '@infrastructure/http';
+import { requireScope, tenantOf } from '@infrastructure/http';
 
 const router = express.Router();
 
@@ -142,7 +142,7 @@ function handleUpload(req: Request, res: Response, next: NextFunction): void {
  * - 415 unsupported file type
  * - 401 when auth is enabled and no valid key is given
  */
-router.post('/', handleUpload, async (req, res) => {
+router.post('/', requireScope('write'), handleUpload, async (req, res) => {
   const files = (req.files as Express.Multer.File[] | undefined) ?? [];
 
   if (files.length === 0) {
@@ -177,7 +177,7 @@ router.post('/', handleUpload, async (req, res) => {
  * Response: { id, state: 'queued'|'active'|'completed'|'failed', result?, error? }
  * - 404 when the job id is unknown (or its history has expired).
  */
-router.get('/status/:jobId', async (req, res) => {
+router.get('/status/:jobId', requireScope('read'), async (req, res) => {
   try {
     const status = await getQueue().getStatus(req.params.jobId);
 

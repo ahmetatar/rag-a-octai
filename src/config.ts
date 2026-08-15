@@ -134,35 +134,55 @@ export default {
    */
   authEnabled: process.env.AUTH_ENABLED === 'true',
   /**
-   * API key → tenant id map, parsed from `API_KEYS` as comma-separated `key:tenantId` pairs
-   * (e.g. `sk-a:acme,sk-b:globex`). Only consulted when authEnabled is true.
+   * SHA-256 key hash (hex) → { tenantId, scopes } map, parsed from `API_KEY_HASHES` as
+   * comma-separated `hash:tenantId` or `hash:tenantId:scope1|scope2` pairs (e.g.
+   * `9f86d0...:acme,3608bd...:globex:read|write`). Raw keys are never configured or stored —
+   * hash a key with
+   * `node -e "console.log(require('crypto').createHash('sha256').update('<key>').digest('hex'))"`
+   * to produce the value for this map. A key with no scope segment gets `['*']` (full access),
+   * so existing two-field entries keep working unchanged. Only consulted when authEnabled is
+   * true.
    */
-  apiKeys: parseApiKeys(process.env.API_KEYS),
+  apiKeyHashes: parseApiKeys(process.env.API_KEY_HASHES),
   /** Tenant assigned to every request when auth is disabled (single-tenant mode). */
   defaultTenant: process.env.DEFAULT_TENANT || 'default',
 };
 
+/** A configured API key's resolved tenant and permitted scopes. */
+export interface ApiKeyEntry {
+  tenantId: string;
+  /** Permitted scopes (e.g. `read`, `write`, `delete`), or `['*']` for unrestricted access. */
+  scopes: string[];
+}
+
 /**
- * Parses the `API_KEYS` environment variable into a key → tenant lookup.
- * @param raw Comma-separated `key:tenantId` pairs.
- * @returns A map from API key to tenant id.
+ * Parses the `API_KEY_HASHES` environment variable into a key-hash → entry lookup.
+ * @param raw Comma-separated `hash:tenantId` or `hash:tenantId:scope1|scope2` pairs.
+ * @returns A map from API key hash (hex) to its tenant and scopes.
  */
-function parseApiKeys(raw?: string): Record<string, string> {
-  const keys: Record<string, string> = {};
+function parseApiKeys(raw?: string): Record<string, ApiKeyEntry> {
+  // Object.create(null) avoids a prototype-chain lookup bypass: a plain `{}` literal
+  // inherits Object.prototype, so `apiKeys['constructor']` (or '__proto__', 'toString', ...)
+  // would resolve to a truthy non-string value instead of undefined, letting an attacker
+  // skip the 401 check with no real key.
+  const keys: Record<string, ApiKeyEntry> = Object.create(null);
 
   for (const pair of (raw || '').split(',')) {
     const trimmed = pair.trim();
     if (!trimmed) continue;
 
-    // Split on the FIRST colon only, so a key containing colons is preserved.
-    const separator = trimmed.indexOf(':');
-    if (separator <= 0 || separator === trimmed.length - 1) continue;
+    const [hash, tenantId, scopesField] = trimmed.split(':');
+    if (!hash?.trim() || !tenantId?.trim()) continue;
 
-    const key = trimmed.slice(0, separator).trim();
-    const tenantId = trimmed.slice(separator + 1).trim();
-    if (key && tenantId) {
-      keys[key] = tenantId;
-    }
+    const scopes = scopesField
+      ? scopesField
+          .split('|')
+          .map((scope) => scope.trim())
+          .filter(Boolean)
+      : ['*'];
+    if (scopes.length === 0) continue;
+
+    keys[hash.trim()] = { tenantId: tenantId.trim(), scopes };
   }
 
   return keys;

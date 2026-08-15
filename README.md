@@ -329,11 +329,11 @@ curl http://localhost:3000/metrics
 | `CHROMADB_PORT` | ChromaDB port | `8000` |
 | `CHROMA_COLLECTION` | ChromaDB collection name | `docs` |
 | `AUTH_ENABLED` | Require an API key on `/ingest`, `/query`, `/documents` and scope each request to its tenant | `false` |
-| `API_KEYS` | Comma-separated `key:tenantId` pairs (e.g. `sk-a:acme,sk-b:globex`) | - |
+| `API_KEY_HASHES` | Comma-separated `sha256Hash:tenantId` or `sha256Hash:tenantId:scope1\|scope2` pairs. Scopes are `read` (query, list, job status), `write` (ingest), `delete` (remove a document); omitting the scope segment grants all three. Raw keys are never configured — hash one with `node -e "console.log(require('crypto').createHash('sha256').update('<key>').digest('hex'))"` and store the hash here; hand the raw key to the tenant once | - |
 | `DEFAULT_TENANT` | Tenant assigned to every request when auth is disabled | `default` |
 | `CORS_ORIGINS` | Comma-separated allowed origins (`*` for any, empty disables CORS) | - |
 | `RATE_LIMIT_WINDOW_MS` | Rate-limit window in milliseconds | `60000` |
-| `RATE_LIMIT_MAX` | Max requests per IP per window | `100` |
+| `RATE_LIMIT_MAX` | Max requests per window — applied per IP on every route, and additionally per tenant (shared across `/ingest`, `/query`, `/documents`) once auth resolves a tenant | `100` |
 | `TRUST_PROXY` | Proxy hops to trust for client IP (behind nginx/LB) | `0` |
 
 ## Testing

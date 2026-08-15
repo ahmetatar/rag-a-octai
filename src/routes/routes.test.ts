@@ -6,13 +6,14 @@ import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import config from '@app/config';
 import { createApp } from '@app/app';
 import { closeIngestQueue } from './ingestion.route';
+import { hashApiKey } from '../infrastructure/http/auth';
 
-const authConfig = { authEnabled: config.authEnabled, apiKeys: config.apiKeys };
+const authConfig = { authEnabled: config.authEnabled, apiKeyHashes: config.apiKeyHashes };
 
 afterEach(() => {
   // Auth is toggled per test via config; restore the defaults so other suites are unaffected.
   config.authEnabled = authConfig.authEnabled;
-  config.apiKeys = authConfig.apiKeys;
+  config.apiKeyHashes = authConfig.apiKeyHashes;
 });
 
 // The upload limits these tests assert against (1 MB, 2 files) are set in vitest.config.ts:
@@ -116,7 +117,7 @@ describe('GET /metrics', () => {
 
   it('is reachable without an API key even when auth is enabled', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await fetch(`${baseUrl}/metrics`);
 
@@ -127,7 +128,7 @@ describe('GET /metrics', () => {
 describe('authentication (when enabled)', () => {
   it('rejects /query without a key', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await postJson('/query', { query: 'hello' });
 
@@ -136,7 +137,7 @@ describe('authentication (when enabled)', () => {
 
   it('rejects /ingest without a key', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await fetch(`${baseUrl}/ingest`, { method: 'POST', body: new FormData() });
 
@@ -145,7 +146,7 @@ describe('authentication (when enabled)', () => {
 
   it('lets a valid key through to request validation', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     // A valid key passes auth; the empty body then fails validation with 400, which proves
     // the request got past the auth layer (401 would mean it did not).
@@ -160,7 +161,7 @@ describe('authentication (when enabled)', () => {
 
   it('leaves /health open without a key', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await fetch(`${baseUrl}/health`);
 
@@ -168,10 +169,51 @@ describe('authentication (when enabled)', () => {
   });
 });
 
+describe('scope enforcement (when enabled)', () => {
+  it('allows /query for a key with the read scope', async () => {
+    config.authEnabled = true;
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['read'] } };
+
+    const response = await fetch(`${baseUrl}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'sk-acme' },
+      body: JSON.stringify({}),
+    });
+
+    // Empty body fails validation with 400 — proves it got past both auth and scope checks.
+    expect(response.status).toBe(400);
+  });
+
+  it('rejects /query with 403 for a key scoped to write only', async () => {
+    config.authEnabled = true;
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['write'] } };
+
+    const response = await fetch(`${baseUrl}/query`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-api-key': 'sk-acme' },
+      body: JSON.stringify({ query: 'hello' }),
+    });
+
+    expect(response.status).toBe(403);
+  });
+
+  it('rejects DELETE /documents/:source with 403 for a key without the delete scope', async () => {
+    config.authEnabled = true;
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['read'] } };
+
+    const response = await fetch(`${baseUrl}/documents/handbook.pdf`, {
+      method: 'DELETE',
+      headers: { 'x-api-key': 'sk-acme' },
+    });
+
+    expect(response.status).toBe(403);
+  });
+});
+
 describe('document management endpoints', () => {
   it('requires a key for GET /documents when auth is enabled', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await fetch(`${baseUrl}/documents`);
 
@@ -180,7 +222,7 @@ describe('document management endpoints', () => {
 
   it('requires a key for DELETE /documents/:source when auth is enabled', async () => {
     config.authEnabled = true;
-    config.apiKeys = { 'sk-acme': 'acme' };
+    config.apiKeyHashes = { [hashApiKey('sk-acme')]: { tenantId: 'acme', scopes: ['*'] } };
 
     const response = await fetch(`${baseUrl}/documents/handbook.pdf`, { method: 'DELETE' });
 

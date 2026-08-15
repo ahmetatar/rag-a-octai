@@ -1,5 +1,6 @@
 import { RequestHandler } from 'express';
-import config from '@app/config';
+import { createHash, timingSafeEqual } from 'crypto';
+import config, { ApiKeyEntry } from '@app/config';
 import { logger } from '../logging';
 
 /**
@@ -7,6 +8,13 @@ import { logger } from '../logging';
  * Downstream handlers read `res.locals[TENANT_LOCAL]` to scope their work.
  */
 export const TENANT_LOCAL = 'tenantId';
+
+/**
+ * The response-local key under which the resolved API key's scopes are stored. Absent when
+ * auth is disabled — that also means unrestricted access, so `requireScope` treats a missing
+ * value as a pass, same as an explicit `['*']`.
+ */
+export const SCOPES_LOCAL = 'scopes';
 
 /**
  * Extracts the API key from a request, accepting either `x-api-key` or a
@@ -22,6 +30,40 @@ function extractApiKey(header?: string, authorization?: string): string | undefi
 
   if (authorization?.startsWith('Bearer ')) {
     return authorization.slice('Bearer '.length).trim();
+  }
+
+  return undefined;
+}
+
+/**
+ * Hashes a raw API key for comparison against the configured key-hash map. Only the hash is
+ * ever stored (in config/env), so a leaked config or process dump does not expose usable keys.
+ * @param key The raw API key.
+ * @returns The hex-encoded SHA-256 hash of the key.
+ */
+export function hashApiKey(key: string): string {
+  return createHash('sha256').update(key).digest('hex');
+}
+
+/**
+ * Looks up a raw API key against the configured hash map using a constant-time comparison
+ * per candidate, so a request with a wrong key takes the same time regardless of how many
+ * leading characters of its hash happen to match.
+ * @param apiKeyHashes The configured API key hash → entry map.
+ * @param candidate The raw API key presented on the request.
+ * @returns The matching entry (tenant + scopes), or undefined when no key matches.
+ */
+function lookupApiKeyEntry(
+  apiKeyHashes: Record<string, ApiKeyEntry>,
+  candidate: string
+): ApiKeyEntry | undefined {
+  const candidateBuffer = Buffer.from(hashApiKey(candidate));
+
+  for (const hash of Object.keys(apiKeyHashes)) {
+    const hashBuffer = Buffer.from(hash);
+    if (hashBuffer.length === candidateBuffer.length && timingSafeEqual(hashBuffer, candidateBuffer)) {
+      return apiKeyHashes[hash];
+    }
   }
 
   return undefined;
@@ -47,15 +89,16 @@ export function authMiddleware(): RequestHandler {
     }
 
     const apiKey = extractApiKey(req.header('x-api-key'), req.header('authorization'));
-    const tenantId = apiKey ? config.apiKeys[apiKey] : undefined;
+    const entry = apiKey ? lookupApiKeyEntry(config.apiKeyHashes, apiKey) : undefined;
 
-    if (!tenantId) {
+    if (!entry) {
       logger.warn(`Rejected unauthenticated request to ${req.method} ${req.originalUrl}`);
       res.status(401).json({ status: 'error', message: 'Unauthorized' });
       return;
     }
 
-    res.locals[TENANT_LOCAL] = tenantId;
+    res.locals[TENANT_LOCAL] = entry.tenantId;
+    res.locals[SCOPES_LOCAL] = entry.scopes;
     next();
   };
 }
@@ -70,4 +113,26 @@ export function authMiddleware(): RequestHandler {
 export function tenantOf(locals: Record<string, unknown>): string {
   const tenantId = locals[TENANT_LOCAL];
   return typeof tenantId === 'string' && tenantId ? tenantId : config.defaultTenant;
+}
+
+/**
+ * Builds a middleware that rejects a request whose resolved API key does not carry the given
+ * scope. Must run after `authMiddleware()`. A request with no scopes recorded (auth disabled,
+ * or a key configured with no scope segment) is treated as unrestricted and always passes —
+ * matching the documented "no scope segment = full access" default in `config.apiKeyHashes`.
+ * @param scope The scope required to proceed (e.g. `read`, `write`, `delete`).
+ * @returns The scope-check middleware.
+ */
+export function requireScope(scope: string): RequestHandler {
+  return (_req, res, next) => {
+    const scopes = res.locals[SCOPES_LOCAL];
+    const allowed = !Array.isArray(scopes) || scopes.includes('*') || scopes.includes(scope);
+
+    if (!allowed) {
+      res.status(403).json({ status: 'error', message: 'Forbidden' });
+      return;
+    }
+
+    next();
+  };
 }
