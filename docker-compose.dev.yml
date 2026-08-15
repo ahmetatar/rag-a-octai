@@ -46,21 +46,22 @@ services:
     volumes:
       - ./src:/app/src
       - ./node_modules:/app/node_modules
+      # GGUF models for EMBEDDING_PROVIDER=llama / RERANK_ENABLED=true; harmless if unused.
+      - ./models:/app/models:ro
+    # Picks up everything from .env (auth keys, thresholds, upload limits, ...); the
+    # environment block below only overrides values that must point at in-network hostnames.
+    env_file:
+      - .env
     environment:
       - PORT=1453
       - CHROMADB_HOST=chromadb
       - CHROMADB_PORT=8000
-      - EMBEDDING_PROVIDER=ollama
-      - EMBEDDING_MODEL=nomic-embed-text
-      # Generation runs through Ollama, so this must be an Ollama model, not an OpenAI one.
-      - GENERATION_MODEL=llama3.2
       - NODE_ENV=development
       - RAG_TOP_K=4
       # The app reads MAX_TOKENS (RAG_MAX_TOKENS was ignored).
       - MAX_TOKENS=200
       # The ollama service below is on the same compose network.
       - OLLAMA_HOST=http://ollama:11434
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
     command: npm run dev -- --inspect=0.0.0.0:9229
     depends_on:
       chromadb:

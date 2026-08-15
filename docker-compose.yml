@@ -41,6 +41,11 @@ services:
     container_name: raga-octi-api
     ports:
       - "3000:3000"
+    # Picks up everything from .env (auth keys, thresholds, upload limits, ...); the
+    # environment block below only overrides the values that must point at in-network
+    # hostnames instead of the localhost defaults used for a bare `npm run dev`.
+    env_file:
+      - .env
     environment:
       - NODE_ENV=production
       - PORT=3000
@@ -48,19 +53,20 @@ services:
       - CHROMADB_PORT=8000
       # This API talks to Ollama for embeddings/generation. Point it at an Ollama reachable
       # from the container (a host install, or an ollama service). host.docker.internal
-      # resolves to the host on Docker Desktop; use host.containers.internal on Podman.
-      - OLLAMA_HOST=${OLLAMA_HOST:-http://host.docker.internal:11434}
-      - EMBEDDING_PROVIDER=${EMBEDDING_PROVIDER:-ollama}
-      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-nomic-embed-text}
-      - GENERATION_MODEL=${GENERATION_MODEL:-llama3.2}
-      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      # resolves to the host on Docker Desktop and on Podman Desktop/podman machine (gvproxy);
+      # on rootless Podman on Linux use host.containers.internal instead.
+      # Deliberately NOT ${OLLAMA_HOST:-...}: compose auto-loads the top-level .env for
+      # variable substitution, and that file's OLLAMA_HOST is the host-side localhost value
+      # (for a bare `npm run dev`), which would silently break in-container connectivity.
+      - OLLAMA_HOST=http://host.docker.internal:11434
       # Async ingest queue (BullMQ + Redis). Uploaded files are staged on a volume the
       # worker reads from; keep it on shared storage if you scale to multiple instances.
-      - QUEUE_DRIVER=${QUEUE_DRIVER:-bull}
       - REDIS_URL=redis://redis:6379
       - UPLOAD_DIR=/app/uploads
     volumes:
       - upload-data:/app/uploads
+      # GGUF models for EMBEDDING_PROVIDER=llama / RERANK_ENABLED=true; harmless if unused.
+      - ./models:/app/models:ro
     depends_on:
       chromadb:
         condition: service_healthy
