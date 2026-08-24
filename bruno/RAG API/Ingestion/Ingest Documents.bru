@@ -1,0 +1,44 @@
+meta {
+  name: Ingest Documents
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/ingest
+  body: multipartForm
+  auth: none
+}
+
+headers {
+  x-api-key: {{api_key}}
+}
+
+body:multipart-form {
+  docs: @file(/absolute/path/to/example.pdf)
+}
+
+vars:post-response {
+  job_id: res.body.jobId
+}
+
+docs {
+  POST /ingest
+  Accepts multipart/form-data with one or more files under the "docs" field
+  (supported types: text/plain, text/html, application/pdf). Requires the
+  "write" scope. Returns 202 immediately with a job id; ingestion runs async.
+
+  Response: { status: 'accepted', jobId }
+
+  To test:
+  1. Replace the path in @file(...) below with a real file on disk
+     (or duplicate the "docs" line to upload multiple files at once).
+  2. Send. The response jobId is saved to {{job_id}} for the
+     "Ingestion Job Status" request.
+
+  Errors:
+  - 400 no file / malformed request
+  - 413 file too large or too many files
+  - 415 unsupported file type
+  - 401 when AUTH_ENABLED=true and no valid key is given
+}

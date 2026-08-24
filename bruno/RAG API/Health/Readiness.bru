@@ -1,0 +1,16 @@
+meta {
+  name: Readiness
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/health/ready
+  body: none
+  auth: none
+}
+
+docs {
+  Readiness probe. Pings ChromaDB and Ollama. Returns 200 with
+  { ready: true, dependencies: [...] } when both are up, 503 otherwise.
+}

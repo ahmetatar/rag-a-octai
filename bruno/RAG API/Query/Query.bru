@@ -1,0 +1,41 @@
+meta {
+  name: Query
+  type: http
+  seq: 1
+}
+
+post {
+  url: {{base_url}}/query
+  body: json
+  auth: none
+}
+
+headers {
+  x-api-key: {{api_key}}
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "query": "What is the capital of France?",
+    "topK": 5
+  }
+}
+
+docs {
+  POST /query
+  Body: { query: string, topK?: number, threshold?: number }
+  Generates an answer grounded in retrieved chunks. Requires the "read" scope.
+
+  - topK: overrides the configured default result count (max: RAG_MAX_TOP_K).
+  - threshold: overrides the score cutoff. Graded against cosine similarity
+    [-1, 1] when reranking is off, or cross-encoder relevance [0, 1] when
+    reranking is on; the response's scoreScale tells you which applied.
+
+  Response: { response: string, sources: [{ id, source, page, score, excerpt }] }
+
+  Errors:
+  - 400 invalid body (empty query, out-of-range topK/threshold)
+  - 401 when AUTH_ENABLED=true and no valid key is given
+  - 500 internal error
+}

@@ -1,0 +1,31 @@
+meta {
+  name: Delete Document
+  type: http
+  seq: 2
+}
+
+delete {
+  url: {{base_url}}/documents/{{document_source}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{api_key}}
+}
+
+docs {
+  DELETE /documents/:source
+  Removes every chunk of the named source document, scoped to the caller's
+  tenant. Requires the "delete" scope.
+
+  Response: { status: 'ok', source, deletedChunks }
+
+  {{document_source}} is set in the environment — update it to a source name
+  returned by "List Documents" before sending.
+
+  Errors:
+  - 404 when the tenant has no document by that name
+  - 401 when AUTH_ENABLED=true and no valid key is given
+  - 500 internal error
+}

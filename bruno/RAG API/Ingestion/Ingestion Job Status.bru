@@ -1,0 +1,30 @@
+meta {
+  name: Ingestion Job Status
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{base_url}}/ingest/status/{{job_id}}
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{api_key}}
+}
+
+docs {
+  GET /ingest/status/:jobId
+  Returns the current state of a previously submitted ingestion job.
+  Requires the "read" scope.
+
+  Response: { id, state: 'queued'|'active'|'completed'|'failed', result?, error? }
+
+  {{job_id}} is populated automatically after running "Ingest Documents",
+  or set it manually in the environment.
+
+  Errors:
+  - 404 when the job id is unknown (or its history has expired)
+  - 401 when AUTH_ENABLED=true and no valid key is given
+}

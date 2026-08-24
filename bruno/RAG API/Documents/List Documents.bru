@@ -1,0 +1,27 @@
+meta {
+  name: List Documents
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{base_url}}/documents
+  body: none
+  auth: none
+}
+
+headers {
+  x-api-key: {{api_key}}
+}
+
+docs {
+  GET /documents
+  Lists the distinct source documents ingested for the caller's tenant, with
+  each one's chunk count. Requires the "read" scope.
+
+  Response: { documents: [{ source, chunks }] }
+
+  Errors:
+  - 401 when AUTH_ENABLED=true and no valid key is given
+  - 500 internal error
+}
