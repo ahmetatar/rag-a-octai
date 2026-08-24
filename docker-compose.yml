@@ -13,8 +13,14 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
     networks:
       - app-network
+    # chromadb/chroma ships no curl/wget/python, so the healthcheck talks HTTP directly over
+    # a bash /dev/tcp socket instead of shelling out to a tool the image doesn't have.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      test:
+        [
+          "CMD-SHELL",
+          "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && head -1 <&3 | grep -q '200 OK'",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

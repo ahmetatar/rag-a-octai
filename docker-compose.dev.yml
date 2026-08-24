@@ -13,27 +13,17 @@ services:
       - ANONYMIZED_TELEMETRY=FALSE
     networks:
       - app-network
+    # chromadb/chroma ships no curl/wget/python, so the healthcheck talks HTTP directly over
+    # a bash /dev/tcp socket instead of shelling out to a tool the image doesn't have.
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/v2/heartbeat"]
+      test:
+        [
+          "CMD-SHELL",
+          "exec 3<>/dev/tcp/127.0.0.1/8000 && printf 'GET /api/v2/heartbeat HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n' >&3 && head -1 <&3 | grep -q '200 OK'",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
-
-  ollama:
-    image: ollama/ollama:latest
-    container_name: ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ollama-data:/root/.ollama
-    networks:
-      - app-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/version"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-    restart: unless-stopped
 
   api:
     build:
@@ -45,7 +35,18 @@ services:
       - "9229:9229"  # Debug port
     volumes:
       - ./src:/app/src
-      - ./node_modules:/app/node_modules
+      # Named volume, NOT a host bind-mount: node_modules has platform-specific native
+      # addons (e.g. @napi-rs/canvas, pulled in by pdf-parse -> pdfjs-dist). A host
+      # node_modules built on macOS/arm64 crashes at require-time inside this Linux
+      # container ("DOMMatrix is not defined" from a native binding that failed to load).
+      # The command below runs `npm ci` inside the container on first start so the volume
+      # gets Linux-native binaries instead.
+      - node-modules-dev:/app/node_modules
+      # `npm run dev`/`npm ci` need these from the host; the production runtime image never
+      # copies package-lock.json or tsconfig.json into its final stage (builder-stage only).
+      - ./package.json:/app/package.json:ro
+      - ./package-lock.json:/app/package-lock.json:ro
+      - ./tsconfig.json:/app/tsconfig.json:ro
       # GGUF models for EMBEDDING_PROVIDER=llama / RERANK_ENABLED=true; harmless if unused.
       - ./models:/app/models:ro
     # Picks up everything from .env (auth keys, thresholds, upload limits, ...); the
@@ -60,13 +61,15 @@ services:
       - RAG_TOP_K=4
       # The app reads MAX_TOKENS (RAG_MAX_TOKENS was ignored).
       - MAX_TOKENS=200
-      # The ollama service below is on the same compose network.
-      - OLLAMA_HOST=http://ollama:11434
-    command: npm run dev -- --inspect=0.0.0.0:9229
+      # Ollama runs on the host (not containerized) — see docker-compose.yml's OLLAMA_HOST
+      # comment for why this is host.docker.internal rather than the .env localhost value.
+      - OLLAMA_HOST=http://host.docker.internal:11434
+    # Only reinstalls when the volume doesn't already have a working install (first run, or
+    # after `podman volume rm raga_octi_app_node-modules-dev`) — not on every restart.
+    command: >
+      sh -c "[ -x node_modules/.bin/ts-node ] || npm ci; npm run dev -- --inspect=0.0.0.0:9229"
     depends_on:
       chromadb:
-        condition: service_healthy
-      ollama:
         condition: service_healthy
     networks:
       - app-network
@@ -78,4 +81,4 @@ networks:
 
 volumes:
   chromadb-data:
-  ollama-data:
+  node-modules-dev:
