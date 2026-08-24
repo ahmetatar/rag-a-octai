@@ -3,6 +3,7 @@ dist
 coverage
 docs/*
 !docs/adr/
+!docs/*.md
 .env
 .DS_Store
 .vscode

@@ -10,7 +10,7 @@ A RAG (Retrieval-Augmented Generation) application built with TypeScript, Expres
   (ChromaDB today, cosine space; see [ADR 0001](docs/adr/0001-vector-store-abstraction-and-backend-strategy.md))
 - 🎯 **Cross-Encoder Reranking** - Optional local reranker that reorders candidates by true
   relevance (measured: MRR 0.928 → 0.990, precision 56% → 88%). See
-  [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
+  [docs/EVAL_AND_RERANKING.md](docs/EVAL_AND_RERANKING.md)
 - 🤖 **AI-Powered Responses** - Ollama, local llama.cpp, or Gemini; answers include cited sources
 - ⚡ **Async Ingestion** - Non-blocking uploads via a BullMQ + Redis job queue (`202` + job id)
 - 🛡️ **Multi-Tenant + Auth** - API-key auth with per-tenant document isolation
@@ -58,6 +58,9 @@ src/
 docs/adr/                  # Architecture Decision Records
 eval/                      # Evaluation corpus + dataset (see EVAL_AND_RERANKING.md)
 ```
+
+👉 **New to this repo? Start here:** [docs/SETUP_GUIDE.md](docs/SETUP_GUIDE.md) walks through
+getting the full stack running locally step by step.
 
 ## Prerequisites
 
@@ -391,7 +394,7 @@ The eval also runs in CI: `ci.yml` fails a pull request when the deterministic r
 metrics fall below `eval/gates.json`, while the full run including generation is nightly and
 non-gating (generation is non-deterministic, so gating it would fail builds on noise).
 
-👉 **Full guide with a step-by-step walkthrough:** [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md)
+👉 **Full guide with a step-by-step walkthrough:** [docs/EVAL_AND_RERANKING.md](docs/EVAL_AND_RERANKING.md)
 
 ## Docker
 
