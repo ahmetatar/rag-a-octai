@@ -48,6 +48,30 @@ hangi metrikleri etkilediği. Ölçülmüş değerler için bkz.
 | `http_request_duration_seconds` (method/route/status) | Endpoint bazlı gecikme |
 | process/default Node metrikleri | CPU, heap, event loop vb. |
 
+## 1b. Prometheus + Grafana ile izleme (production/canlı metrikler)
+
+`/metrics` endpoint'i Prometheus formatında zaten expose ediliyor
+(`src/infrastructure/observability/metrics.ts`). `docker-compose.yml`'e eklenen `prometheus`
+ve `grafana` servisleri bunu otomatik scrape edip görselleştiriyor:
+
+```bash
+docker compose up -d prometheus grafana   # podman kullanıyorsan: podman compose up -d ...
+```
+
+- **Prometheus**: http://localhost:9090 — scrape config: `monitoring/prometheus/prometheus.yml`
+  (hedef: `api:3000/metrics`, 15s aralıkla).
+- **Grafana**: http://localhost:3001 — kullanıcı/şifre `admin`/`admin` (ilk girişte değiştir).
+  Prometheus datasource'u ve "RAG Overview" dashboard'u (`monitoring/grafana/provisioning/`)
+  otomatik provision edilir — elle kurulum gerekmez.
+  - Retrieval top score (p50/p90) ve dağılım (heatmap) — `rag_retrieval_top_score`
+  - Route bazlı istek oranı ve p95 gecikme — `http_request_duration_seconds`
+  - 5xx hata oranı
+
+Bu, `npm run eval` harness'inin sonuçlarını **değil**, canlı `/query` trafiğinin retrieval
+kalitesini gösterir. Eval harness kısa ömürlü bir batch script olduğu için (scrape edilecek
+sürekli bir endpoint'i yok), onun sonuçlarını Grafana'ya taşımak için ayrı bir yaklaşım
+(Pushgateway) gerekir — henüz kurulmadı.
+
 ## 2. Env değişkeni → etkilediği metrikler
 
 | Env değişkeni | Etkilediği metrikler | Nasıl |

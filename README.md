@@ -294,6 +294,9 @@ histogram. Every request also carries an `x-request-id` correlation id (echoed f
 curl http://localhost:3000/metrics
 ```
 
+`docker-compose.yml` also ships a Prometheus + Grafana stack that scrapes this endpoint —
+see [Monitoring](#monitoring) below.
+
 ## Configuration Options
 
 | Environment Variable | Description | Default |
@@ -413,6 +416,26 @@ docker-compose -f docker-compose.dev.yml up -d
 ```
 
 This starts ChromaDB, Ollama, and the API server with hot reloading.
+
+## Monitoring
+
+The production compose file includes Prometheus and Grafana, wired to scrape the API's
+`/metrics` endpoint automatically:
+
+```bash
+docker-compose up -d prometheus grafana
+```
+
+- **Prometheus** — http://localhost:9090 (scrape config: `monitoring/prometheus/prometheus.yml`,
+  target `api:3000/metrics`, 15s interval)
+- **Grafana** — http://localhost:3001 (default login `admin`/`admin`, change it on first login).
+  The Prometheus datasource and a **"RAG Overview"** dashboard (retrieval top-score
+  p50/p90 + distribution, per-route request rate, p95 latency, 5xx rate) are provisioned
+  automatically from `monitoring/grafana/provisioning/` — no manual setup needed.
+
+This tracks **live production query traffic**, not `npm run eval` runs — the eval harness is
+a short-lived batch script with nothing for Prometheus to scrape continuously. See
+[Evaluation & Reranking](#evaluation--reranking) for that side.
 
 ## Supported File Types
 

@@ -1,0 +1,12 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # The API mounts /metrics unauthenticated (see src/app.ts + infrastructure/observability),
+  # since a Prometheus scraper carries no API key. `api` resolves via the app-network alias
+  # docker-compose.yml gives the service.
+  - job_name: raga-octi-api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['api:3000']
