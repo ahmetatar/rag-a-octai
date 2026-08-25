@@ -25,10 +25,18 @@ export class BullIngestQueue implements IngestQueue {
 
     this.queue = new Queue<IngestJobPayload>(QUEUE_NAME, { connection: queueConnection });
 
-    this.worker = new Worker<IngestJobPayload>(QUEUE_NAME, async (job) => handler(job.data), {
-      connection: workerConnection,
-      concurrency: config.queueConcurrency,
-    });
+    this.worker = new Worker<IngestJobPayload>(
+      QUEUE_NAME,
+      async (job) => {
+        const maxAttempts = job.opts.attempts ?? 1;
+        const isLastAttempt = job.attemptsMade + 1 >= maxAttempts;
+        return handler(job.data, isLastAttempt);
+      },
+      {
+        connection: workerConnection,
+        concurrency: config.queueConcurrency,
+      }
+    );
 
     this.worker.on('failed', (job, error) => {
       logger.error(`Ingest job ${job?.id} failed: ${error.message}`);

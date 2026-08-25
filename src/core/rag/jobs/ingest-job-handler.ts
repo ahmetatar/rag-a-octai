@@ -8,22 +8,27 @@ import { IngestJobHandler, IngestJobPayload, IngestJobResult } from './ingest-qu
  * Builds the handler that turns a queued job into an actual ingestion run.
  *
  * Staged files are read from disk into buffers here (the buffer never travels through the
- * queue), the shared ingestor processes them, and the staged files are always removed
- * afterwards — even on failure — so the upload directory does not grow without bound.
+ * queue), and the shared ingestor processes them. Staged files are removed on success, or on
+ * failure once the queue has no more retries left for this job — removing them after every
+ * failed attempt would delete the file out from under a still-pending retry, turning a
+ * transient error into a permanent ENOENT on the next attempt.
  *
  * @param getIngestor Resolves the shared ingestor (lazy; the embedding model may load).
  * @returns A job handler.
  */
 export function createIngestJobHandler(getIngestor: () => Promise<RagDataIngestor>): IngestJobHandler {
-  return async (payload: IngestJobPayload): Promise<IngestJobResult> => {
+  return async (payload: IngestJobPayload, isLastAttempt = true): Promise<IngestJobResult> => {
     try {
       const ingestor = await getIngestor();
       const files = await readStagedFiles(payload);
-      return await ingestor.ingest(files, payload.params as HandlerResolveParameters, payload.tenantId);
-    } finally {
-      // Always remove staged files, even if resolving the ingestor or reading them failed,
-      // so a failure does not leak files into the upload directory.
+      const result = await ingestor.ingest(files, payload.params as HandlerResolveParameters, payload.tenantId);
       await removeStagedFiles(payload);
+      return result;
+    } catch (error) {
+      if (isLastAttempt) {
+        await removeStagedFiles(payload);
+      }
+      throw error;
     }
   };
 }

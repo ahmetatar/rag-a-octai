@@ -73,4 +73,23 @@ describe('createIngestJobHandler', () => {
 
     await expect(fs.access(filePath)).rejects.toThrow();
   });
+
+  it('keeps staged files on failure when a retry is still pending', async () => {
+    const filePath = await stage('doc.txt', 'content');
+    const handler = createIngestJobHandler(
+      async () => ({ ingest: async () => { throw new Error('boom'); } } as never)
+    );
+
+    await expect(
+      handler(
+        {
+          files: [{ path: filePath, originalname: 'doc.txt', mimetype: 'text/plain', size: 7 }],
+          tenantId: 'acme',
+        },
+        false
+      )
+    ).rejects.toThrow('boom');
+
+    await expect(fs.access(filePath)).resolves.toBeUndefined();
+  });
 });

@@ -54,8 +54,13 @@ export interface IngestJobStatus {
 /**
  * Processes one ingest job. Supplied to the queue at construction, so the queue stays
  * decoupled from the ingestion pipeline.
+ *
+ * @param payload The job to process.
+ * @param isLastAttempt Whether this is the final retry — the handler uses this to decide
+ * whether to remove the staged files. Defaults to `true` (single-attempt queues, like the
+ * in-memory one, always run last).
  */
-export type IngestJobHandler = (payload: IngestJobPayload) => Promise<IngestJobResult>;
+export type IngestJobHandler = (payload: IngestJobPayload, isLastAttempt?: boolean) => Promise<IngestJobResult>;
 
 /**
  * An ingest job queue: accepts work and reports on it, without blocking the request that
