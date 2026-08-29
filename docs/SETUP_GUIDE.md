@@ -1,6 +1,6 @@
 # Local Setup Guide
 
-A step-by-step walkthrough for getting the Raga Octi RAG pipeline running on your machine.
+A step-by-step walkthrough for getting the Groundwire RAG pipeline running on your machine.
 For architectural context see the [README](../README.md); for evaluation and reranking see
 [EVAL_AND_RERANKING.md](EVAL_AND_RERANKING.md).
 
@@ -25,7 +25,7 @@ docker info
 
 ```bash
 git clone <repository-url>
-cd raga_octi_app
+cd groundwire
 npm install
 ```
 

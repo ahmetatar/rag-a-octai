@@ -1,4 +1,4 @@
-# Raga Octi
+# Groundwire
 
 A RAG (Retrieval-Augmented Generation) application built with TypeScript, Express, ChromaDB, and Ollama. This system enables document ingestion and intelligent query responses using vector embeddings and language models.
 
@@ -75,7 +75,7 @@ getting the full stack running locally step by step.
 1. **Clone the repository**
    ```bash
    git clone <repository-url>
-   cd raga_octi_app
+   cd groundwire
    ```
 
 2. **Install dependencies**

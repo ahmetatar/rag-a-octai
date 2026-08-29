@@ -2,7 +2,7 @@
 
 - **Status:** Accepted (interface); Recommended path (backend migration)
 - **Date:** 2026-07
-- **Deciders:** raga-octi maintainers
+- **Deciders:** groundwire maintainers
 - **Related:** ROADMAP T9 (this task), T4b (deferred hybrid search), T1 (tenant isolation), T2 (durability)
 
 ## Context

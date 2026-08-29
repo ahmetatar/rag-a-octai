@@ -29,7 +29,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: raga-octi-api
+    container_name: groundwire-api
     ports:
       - "1453:1453"
       - "9229:9229"  # Debug port
@@ -65,7 +65,7 @@ services:
       # comment for why this is host.docker.internal rather than the .env localhost value.
       - OLLAMA_HOST=http://host.docker.internal:11434
     # Only reinstalls when the volume doesn't already have a working install (first run, or
-    # after `podman volume rm raga_octi_app_node-modules-dev`) — not on every restart.
+    # after `podman volume rm groundwire_node-modules-dev`) — not on every restart.
     command: >
       sh -c "[ -x node_modules/.bin/ts-node ] || npm ci; npm run dev -- --inspect=0.0.0.0:9229"
     depends_on:

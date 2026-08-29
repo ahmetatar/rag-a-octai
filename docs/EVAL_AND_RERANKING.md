@@ -1,6 +1,6 @@
 # Evaluation & Reranking — Guide + Walkthrough
 
-This document explains two related features of Raga Octi:
+This document explains two related features of Groundwire:
 
 1. **The evaluation harness** — an automated "exam" that measures how well the system finds
    the right documents.

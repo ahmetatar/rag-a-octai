@@ -44,7 +44,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: raga-octi-api
+    container_name: groundwire-api
     ports:
       - "3000:3000"
     # Picks up everything from .env (auth keys, thresholds, upload limits, ...); the
