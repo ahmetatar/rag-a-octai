@@ -2,13 +2,26 @@ import { describe, expect, it } from 'vitest';
 import config from '@app/config';
 import { RagOrchestrator } from './rag-orchestrator';
 import { BaseEmbedding } from './embedding';
-import { ABSTENTION_MESSAGE, LangModelBase, NO_ANSWER_SENTINEL, PromptContext } from './llm';
+import { ABSTENTION_MESSAGE, GenerationResult, LangModelBase, NO_ANSWER_SENTINEL, PromptContext } from './llm';
+import { QueryExpander, QueryExpansion } from './query';
 import { Reranker } from './reranking';
 import { SearchResult } from './vector-store';
 
 class StubEmbedding extends BaseEmbedding {
-  async embed(): Promise<number[][]> {
-    return [[0.1, 0.2]];
+  /** One distinct vector per input text, so a test can tell which text was embedded. */
+  async embed(texts: string | string[]): Promise<number[][]> {
+    const list = Array.isArray(texts) ? texts : [texts];
+    return list.map((text) => [text.length, 0]);
+  }
+}
+
+/** A query expander scripted to return a fixed set of search texts. */
+class ScriptedQueryExpander extends QueryExpander {
+  constructor(private readonly searchTexts: string[]) {
+    super();
+  }
+  async expand(): Promise<QueryExpansion> {
+    return { searchTexts: this.searchTexts };
   }
 }
 
@@ -21,12 +34,12 @@ class RecordingLangModel extends LangModelBase {
   lastPrompt?: PromptContext;
   scripted?: string;
 
-  async generateResponse(promptCtx: PromptContext): Promise<string> {
+  async generateResponse(promptCtx: PromptContext): Promise<GenerationResult> {
     this.lastPrompt = promptCtx;
     if (this.scripted !== undefined) {
-      return this.scripted;
+      return { text: this.scripted };
     }
-    return this.buildContext(promptCtx) ? 'answer from context' : NO_ANSWER_SENTINEL;
+    return { text: this.buildContext(promptCtx) ? 'answer from context' : NO_ANSWER_SENTINEL };
   }
 }
 
@@ -309,3 +322,81 @@ function failingReranker(): Reranker {
     }
   })();
 }
+
+describe('RagOrchestrator.query — query expansion', () => {
+  it('searches once with the raw question by default (no expander configured)', async () => {
+    const langModel = new RecordingLangModel();
+    const searchedVectors: number[][] = [];
+    const store = {
+      search: async (vector: number[]) => {
+        searchedVectors.push(vector);
+        return [CLOSE_MATCH];
+      },
+    } as never;
+    const orchestrator = new RagOrchestrator(langModel, new StubEmbedding(), store);
+
+    await orchestrator.query('question?', 3, 0);
+
+    expect(searchedVectors).toHaveLength(1);
+  });
+
+  it('searches once per expanded text and merges the results', async () => {
+    const langModel = new RecordingLangModel();
+    const resultsByVectorLength: Record<number, SearchResult[]> = {
+      // StubEmbedding encodes a text's length as the first vector component, so each
+      // distinct search text below maps to a distinct, inspectable result set.
+      5: [CLOSE_MATCH],
+      9: [DISTANT_MATCH],
+    };
+    const searchedLengths: number[] = [];
+    const store = {
+      search: async (vector: number[]) => {
+        searchedLengths.push(vector[0]);
+        return resultsByVectorLength[vector[0]] ?? [];
+      },
+    } as never;
+    const expander = new ScriptedQueryExpander(['short', 'a longer q']); // lengths 5 and 10
+    const orchestrator = new RagOrchestrator(langModel, new StubEmbedding(), store, undefined, expander);
+
+    const answer = await orchestrator.query('question?', 5, 0);
+
+    expect(searchedLengths.sort((a, b) => a - b)).toEqual([5, 10]);
+    // Only the 5-length text ("short") has a mapped result (CLOSE_MATCH); the 10-length one
+    // ("a longer q") is unmapped and returns nothing — proves both searches actually ran and
+    // were merged, not just the first.
+    expect(answer.sources.map((source) => source.id)).toEqual(['chunk-close']);
+  });
+
+  it('keeps the best score when the same chunk is found by two expanded searches', async () => {
+    const langModel = new RecordingLangModel();
+    const lowScore: SearchResult = { ...CLOSE_MATCH, score: 0.3 };
+    const highScore: SearchResult = { ...CLOSE_MATCH, score: 0.95 };
+    let call = 0;
+    const store = {
+      search: async () => [call++ === 0 ? lowScore : highScore],
+    } as never;
+    const expander = new ScriptedQueryExpander(['first search', 'second search']);
+    const orchestrator = new RagOrchestrator(langModel, new StubEmbedding(), store, undefined, expander);
+
+    const answer = await orchestrator.query('question?', 5, 0);
+
+    expect(answer.sources).toHaveLength(1);
+    expect(answer.sources[0].score).toBeCloseTo(0.95);
+  });
+
+  it('caps the merged candidate pool at fetchK regardless of how many search texts ran', async () => {
+    const langModel = new RecordingLangModel();
+    // Three expanded searches, each returning a distinct chunk, all above threshold.
+    const store = {
+      search: async (vector: number[]) => [{ ...CLOSE_MATCH, id: `chunk-${vector[0]}`, score: vector[0] }],
+    } as never;
+    const expander = new ScriptedQueryExpander(['a', 'bb', 'ccc']);
+    const orchestrator = new RagOrchestrator(langModel, new StubEmbedding(), store, undefined, expander);
+
+    // topK=2 with no reranker means fetchK=2, so the merge must cap at 2 even though 3
+    // searches ran and 3 distinct chunks were found.
+    const answer = await orchestrator.query('question?', 2, 0);
+
+    expect(answer.sources.length).toBeLessThanOrEqual(2);
+  });
+});

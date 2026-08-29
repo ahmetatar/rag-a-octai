@@ -416,6 +416,33 @@ metrics. It needs a reachable LLM (Ollama or a local generation model); without 
 answer metrics and still reports retrieval metrics — including `falseRetrievalRate`, which is
 retrieval-only and so is reported either way.
 
+Every generation call also reports **token usage** (`prompt_eval_count`/`eval_count` from
+Ollama), and the report totals it as `TOKENS prompt=… completion=… cost=$…`. The dollar figure
+is 0 by default — this stack is self-hosted — but if you price a hosted model, set
+`EVAL_PROMPT_COST_PER_1K_TOKENS` / `EVAL_COMPLETION_COST_PER_1K_TOKENS` to see what a run would
+have cost against that rate card.
+
+### Score answer correctness with an LLM judge
+
+```bash
+EVAL_GENERATE=true EVAL_JUDGE=true EMBEDDING_PROVIDER=llama npm run eval
+```
+
+`groundedness` is a deterministic proxy: it measures word-trigram overlap between the answer
+and the retrieved chunks, so it cannot tell "correct answer, phrased in the model's own words"
+apart from "wrong answer, fluent paraphrase of the wrong chunk". `EVAL_JUDGE=true` layers a
+second model on top that reads the question, the case's `expectedKeywords`, and the generated
+answer, and gives an absolute correct/incorrect verdict with a one-line reason
+(`src/core/rag/eval/judge.ts`). It only judges non-abstained answerable cases that declare
+`expectedKeywords` — there is nothing to check a judgment against otherwise.
+
+The judge model defaults to the generation model; override it with `EVAL_JUDGE_MODEL` to use a
+different (larger, or just different) model as grader. Like every generation metric, the
+judge's verdict is reported (`JUDGE accuracy=…`) but **never gates the build** — it comes from
+a non-deterministic LLM call, same as `groundedness` and `falseAnswerRate` (see
+[`GATEABLE_METRICS`](#step-5-check-the-gates)). A failed or unparseable judge call leaves the
+case unjudged rather than silently counting as incorrect.
+
 ### Tips for a meaningful dataset
 
 - **Make sure the answers are not already in the model's head.** On a general-knowledge corpus
@@ -432,6 +459,11 @@ retrieval-only and so is reported either way.
   the corpus. The near-corpus ones are what catch hallucination.
 - Make the documents **long enough to split into several chunks**. If every file is one chunk,
   `CHUNK_OVERLAP` and `RERANK_FETCH_K` have nothing to act on and their A/Bs are meaningless.
+- **Structure documents with standalone heading lines** ("1. Overview", "2.1 Kestrel
+  collector", or a flat "Context" / "Decision" style) — a blank line before and after, no
+  trailing punctuation. Every chunk is tagged with `heading`/`sectionPath` derived from this
+  structure (`chunkers/section-splitter.ts`), and a document with no such structure still
+  works, it just gets one path-less section.
 - Keep the corpus small and fast; the harness is meant to run often.
 
 ---
@@ -449,7 +481,14 @@ retrieval-only and so is reported either way.
 | `RETRIEVAL_THRESHOLD` | Minimum **cosine similarity**; applies when reranking did not run | `0.35` |
 | `RERANK_THRESHOLD` | Minimum **cross-encoder relevance**; applies when reranking ran | `0.1` |
 | `EVAL_GATE` | Exit non-zero when a threshold in `eval/gates.json` is missed | `false` |
+| `EVAL_JUDGE` | Also have an LLM judge give an absolute correctness verdict (needs `EVAL_GENERATE=true`) | `false` |
+| `EVAL_JUDGE_MODEL` | Model used as the judge | the generation model |
+| `EVAL_PROMPT_COST_PER_1K_TOKENS` | USD per 1,000 prompt tokens, for the run's cost estimate | `0` |
+| `EVAL_COMPLETION_COST_PER_1K_TOKENS` | USD per 1,000 completion tokens, for the run's cost estimate | `0` |
 | `RAG_TOP_K` | Final number of chunks kept (`k` in the metrics) | `3` |
+| `CHUNK_UNIT` | What `CHUNK_SIZE`/`CHUNK_OVERLAP` are measured in: `characters` or `tokens` (cl100k_base) | `characters` |
+| `CHUNK_INCLUDE_SECTION_CONTEXT` | Prepend each chunk's section breadcrumb to its own text (not just metadata). Measured to make retrieval WORSE on this corpus — see the task list | `false` |
+| `QUERY_STRATEGY` | Query-side expansion: `none`, `rewrite`, `multi-query`, `hyde`. Each non-`none` strategy costs an LLM call per query; measured to add 9-12x retrieval latency with no quality gain on this corpus (`hyde` measurably worse) — see the task list | `none` |
 
 ## Part 5 — Where the code lives
 
@@ -457,6 +496,10 @@ retrieval-only and so is reported either way.
 |------|------|
 | `src/core/rag/eval/metrics.ts` | Pure metric functions (precision/recall/MRR/…), unit-tested |
 | `src/core/rag/eval/runner.ts` | Ingests corpus, runs cases, applies reranking + threshold, aggregates |
+| `src/core/rag/eval/judge.ts` | Optional LLM judge (`EVAL_JUDGE=true`); absolute correctness verdict, unit-tested |
+| `src/core/rag/chunkers/section-splitter.ts` | Splits a document into heading-path sections before chunking, so every chunk carries `heading`/`sectionPath`; unit-tested |
+| `src/core/rag/chunkers/token-length.ts` | Token-length function for `CHUNK_UNIT=tokens` |
+| `src/core/rag/query/` | Query-expansion strategies (`QUERY_STRATEGY`) — rewrite/multi-query/HyDE, unit-tested |
 | `src/core/rag/llm/abstention.ts` | The `NO_ANSWER` sentinel protocol shared by the prompt, the API and the eval |
 | `src/core/rag/eval/gates.ts` | Gate thresholds: parsing, validation, verdicts; unit-tested |
 | `src/eval.ts` | `npm run eval` entry point: prints the tables and gates, writes JSON |

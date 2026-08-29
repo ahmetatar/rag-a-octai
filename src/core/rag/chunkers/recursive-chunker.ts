@@ -1,5 +1,6 @@
 import { RecursiveCharacterTextSplitter } from '@langchain/textsplitters';
 import { Chunker, ChunkingOptions } from './chunker';
+import { tokenLength } from './token-length';
 import { Document } from '../file-handlers';
 
 /**
@@ -24,6 +25,7 @@ export class RecursiveChunker extends Chunker {
     this.options = {
       chunkSize: options?.chunkSize,
       overlap: options?.overlap,
+      unit: options?.unit ?? 'characters',
     };
   }
 
@@ -32,6 +34,10 @@ export class RecursiveChunker extends Chunker {
     const textSplitter = new RecursiveCharacterTextSplitter({
       chunkSize: this.options.chunkSize,
       chunkOverlap: this.options.overlap ?? 0,
+      // The splitter still recurses on paragraph/sentence/word boundaries either way — only
+      // how it MEASURES a candidate split changes. Passing the length function is what turns
+      // "count characters" into "count tokens" without reimplementing the splitting logic.
+      ...(this.options.unit === 'tokens' ? { lengthFunction: tokenLength } : {}),
     });
 
     const chunks = await textSplitter.splitText(text);

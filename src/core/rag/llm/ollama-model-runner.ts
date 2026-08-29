@@ -1,5 +1,5 @@
 import { ChatRequest, Ollama } from 'ollama';
-import { LangModelBase, PromptContext } from './model-base';
+import { GenerationResult, LangModelBase, PromptContext } from './model-base';
 import { resilientCall } from '../resilient-call';
 import { ABSTENTION_INSTRUCTION, NO_ANSWER_SENTINEL } from './abstention';
 
@@ -18,10 +18,15 @@ export class OllamaLangModelRunner extends LangModelBase {
   }
 
   /** @inheritdoc */
-  async generateResponse(promptCtx: PromptContext): Promise<string> {
+  async generateResponse(promptCtx: PromptContext): Promise<GenerationResult> {
     const prompt = this.buildPrompt(promptCtx);
     const response = await resilientCall('ollama.chat', () => this.ollama.chat(prompt));
-    return response.message.content;
+    return {
+      text: response.message.content,
+      // Ollama reports these on every non-streamed chat call, so usage is effectively always
+      // present here — still optional on the interface for runners that cannot supply it.
+      usage: { promptTokens: response.prompt_eval_count, completionTokens: response.eval_count },
+    };
   }
 
   /**

@@ -265,6 +265,18 @@ export function meanDefined(values: (number | undefined)[]): number | undefined 
 }
 
 /**
+ * Sums a list of numbers, ignoring `undefined`. Used for count/cost metrics (tokens, dollars)
+ * where the run-level figure is a total, not a mean.
+ *
+ * @param values The values, some possibly undefined.
+ * @returns The sum of the defined values, or undefined when none are defined.
+ */
+export function sumDefined(values: (number | undefined)[]): number | undefined {
+  const present = values.filter((value): value is number => value !== undefined);
+  return present.length === 0 ? undefined : present.reduce((sum, value) => sum + value, 0);
+}
+
+/**
  * Splits text into normalised word trigrams. Case, punctuation and runs of whitespace are
  * discarded so that formatting differences between an answer and its source do not read as
  * a lack of grounding.

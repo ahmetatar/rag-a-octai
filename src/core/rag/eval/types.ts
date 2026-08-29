@@ -93,6 +93,19 @@ export interface EvalCaseResult {
   retrievalMs?: number;
   /** Wall-clock time for generation, in milliseconds; generation only. */
   generationMs?: number;
+  /** Tokens consumed by the generation prompt, when the backend reports them; generation only. */
+  promptTokens?: number;
+  /** Tokens produced by the generated answer, when the backend reports them; generation only. */
+  completionTokens?: number;
+  /** Estimated cost of this case's generation call in USD, from the configured per-token rates. */
+  costUsd?: number;
+  /**
+   * The LLM judge's verdict on answer correctness (`EVAL_JUDGE=true`). Present only for
+   * non-abstained, answerable cases that declare `expectedKeywords` — see {@link LlmJudge}.
+   */
+  judgeCorrect?: boolean;
+  /** The judge's justification for {@link judgeCorrect}, for the report. Not scored. */
+  judgeReasoning?: string;
 }
 
 /**
@@ -119,6 +132,14 @@ export interface EvalAggregate {
   retrievalMs?: number;
   /** Mean generation latency in milliseconds. */
   generationMs?: number;
+  /** Total prompt tokens consumed across every generation call in this run. */
+  totalPromptTokens?: number;
+  /** Total completion tokens produced across every generation call in this run. */
+  totalCompletionTokens?: number;
+  /** Total estimated generation cost in USD across this run, from the configured rates. */
+  totalCostUsd?: number;
+  /** Fraction of judged cases the LLM judge marked correct; `EVAL_JUDGE=true` only. */
+  judgeAccuracy?: number;
 }
 
 /**

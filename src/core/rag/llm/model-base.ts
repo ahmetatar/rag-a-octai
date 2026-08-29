@@ -10,15 +10,36 @@ export interface PromptContext {
 }
 
 /**
+ * Token counts for one generation call, when the backend reports them. Used to derive
+ * cost and to track generation spend in the eval harness — not every runner can supply
+ * this (a local llama.cpp session may not), so callers must treat it as optional.
+ */
+export interface TokenUsage {
+  /** Tokens consumed by the prompt (system + context + question). */
+  promptTokens: number;
+  /** Tokens produced by the model in its reply. */
+  completionTokens: number;
+}
+
+/**
+ * The result of one generation call: the text plus, when available, how many tokens it cost.
+ */
+export interface GenerationResult {
+  text: string;
+  usage?: TokenUsage;
+}
+
+/**
  * Abstract class representing a language model.
  */
 export abstract class LangModelBase {
   /**
    * Generate a response based on the given prompt.
    * @param promptCtx - The prompt containing text, question, and optional parameters.
-   * @returns {Promise<string>} A promise that resolves to the generated response string.
+   * @returns A promise that resolves to the generated text and, when the backend reports it,
+   * the token usage.
    */
-  abstract generateResponse(promptCtx: PromptContext): Promise<string>;
+  abstract generateResponse(promptCtx: PromptContext): Promise<GenerationResult>;
 
   /**
    * Builds the context block from the retrieved documents.

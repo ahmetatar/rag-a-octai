@@ -2,6 +2,7 @@ import config from '@app/config';
 import { ChromaVectorStore, SearchResult, VectorStore } from './vector-store';
 import { BaseEmbedding, createEmbedding } from './embedding';
 import { isAbstention, LangModelBase, OllamaLangModelRunner, presentAnswer, PromptContext } from './llm';
+import { createQueryExpander, IdentityQueryExpander, QueryExpander } from './query';
 import { createReranker, Reranker } from './reranking';
 import { logger } from '@infrastructure/logging';
 import { observeRetrievalTopScore } from '@infrastructure/observability';
@@ -66,8 +67,9 @@ export async function createRagOrchestrator(): Promise<RagOrchestrator> {
   const store = new ChromaVectorStore(config.chromaHost, config.chromaPort, config.chromaCollection);
   const langModel = new OllamaLangModelRunner(config.generationModel, config.ollamaHost);
   const reranker = await createReranker();
+  const queryExpander = createQueryExpander();
 
-  return new RagOrchestrator(langModel, embedding, store, reranker);
+  return new RagOrchestrator(langModel, embedding, store, reranker, queryExpander);
 }
 
 /**
@@ -83,7 +85,8 @@ export class RagOrchestrator {
     private readonly langModel: LangModelBase,
     private readonly embedding: BaseEmbedding,
     private readonly store: VectorStore,
-    private readonly reranker?: Reranker
+    private readonly reranker?: Reranker,
+    private readonly queryExpander: QueryExpander = new IdentityQueryExpander()
   ) {}
 
   /**
@@ -103,12 +106,18 @@ export class RagOrchestrator {
     maxTokens?: number,
     tenantId?: string
   ): Promise<RagAnswer> {
-    //1. Embed the query
-    const queryEmbedding = await this.embedding.embed([query]);
-    //2. Search the vector store, restricted to the tenant's own documents. With a reranker,
-    //   fetch a wider candidate pool so it has more to choose from before we cut to top-K.
+    //1. Expand the query into the text(s) to actually search with (identity by default — see
+    //   QueryExpander), then embed all of them in one batch.
+    const expansion = await this.queryExpander.expand(query);
+    const searchVectors = await this.embedding.embed(expansion.searchTexts);
+    //2. Search the vector store once per search text, restricted to the tenant's own
+    //   documents, then merge into one candidate list (best score per chunk id) — so
+    //   everything downstream sees the same shape of candidate list regardless of how many
+    //   searches ran. With a reranker, fetch a wider pool per search so it has more to choose
+    //   from before we cut to top-K.
     const fetchK = this.reranker ? Math.max(topK, config.rerankFetchK) : topK;
-    const candidates = await this.store.search(queryEmbedding[0], fetchK, tenantId);
+    const resultsPerSearch = await Promise.all(searchVectors.map((vector) => this.store.search(vector, fetchK, tenantId)));
+    const candidates = mergeSearchResults(resultsPerSearch, fetchK);
 
     //3. Rerank the candidates (cross-encoder) and keep the best top-K, or use vector order.
     const reranked = await this.rerank(query, candidates);
@@ -140,7 +149,7 @@ export class RagOrchestrator {
       sources: filteredResults,
       maxTokens: maxTokens ?? 512,
     };
-    const rawResponse = await this.langModel.generateResponse(promptContext);
+    const { text: rawResponse } = await this.langModel.generateResponse(promptContext);
     const abstained = isAbstention(rawResponse);
 
     // An abstention cites nothing: returning sources next to "I could not find an answer"
@@ -204,6 +213,45 @@ interface RerankOutcome {
  */
 export function defaultThresholdFor(scale: ScoreScale): number {
   return scale === 'reranker' ? config.rerankThreshold : config.retrievalThreshold;
+}
+
+/**
+ * Merges the result sets from one or more searches (one per query-expansion search text) into
+ * a single candidate list: the same chunk found by two different searches keeps its BEST
+ * score rather than appearing twice, and the merged list is capped at `limit` so a
+ * multi-search expansion never hands the reranker (or the threshold) a larger candidate pool
+ * than a single search would have — cost stays bounded regardless of how many search texts
+ * the expander produced.
+ *
+ * Exported so the eval harness can merge the same way production does (see
+ * `eval/runner.ts:scoreCase`) — the eval mirrors the query pipeline rather than reimplementing
+ * it, so its numbers describe the pipeline that actually runs.
+ *
+ * @param resultsPerSearch One result array per search text, each already in best-first order.
+ * @param limit Maximum candidates to return.
+ * @returns The merged, deduplicated, best-first candidate list.
+ */
+export function mergeSearchResults(resultsPerSearch: SearchResult[][], limit: number): SearchResult[] {
+  if (resultsPerSearch.length === 1) {
+    return resultsPerSearch[0];
+  }
+
+  const bestById = new Map<string, SearchResult>();
+  for (const results of resultsPerSearch) {
+    for (const result of results) {
+      // Every stored chunk has an id; content is a fallback key for the (untyped) case a
+      // store implementation omits one, so a merge never accidentally drops a real result.
+      const key = result.id ?? result.content;
+      const existing = bestById.get(key);
+      if (!existing || result.score > existing.score) {
+        bestById.set(key, result);
+      }
+    }
+  }
+
+  return Array.from(bestById.values())
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit);
 }
 
 /**

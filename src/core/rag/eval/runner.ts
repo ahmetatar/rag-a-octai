@@ -7,9 +7,11 @@ import { createEmbedding } from '../embedding';
 import { FileInfo, resolveFileHandler } from '../file-handlers';
 import { RagDataIngestor } from '../ingestion';
 import { isAbstention, OllamaLangModelRunner } from '../llm';
-import { defaultThresholdFor, ScoreScale } from '../rag-orchestrator';
+import { QueryExpander } from '../query';
+import { defaultThresholdFor, mergeSearchResults, ScoreScale } from '../rag-orchestrator';
 import { Reranker } from '../reranking';
 import { ChromaVectorStore, SearchResult, VectorStore } from '../vector-store';
+import { LlmJudge } from './judge';
 import {
   AbstentionOutcome,
   abstentionAccuracy,
@@ -23,6 +25,7 @@ import {
   recallAtK,
   reciprocalRank,
   snippetCoverage,
+  sumDefined,
 } from './metrics';
 import { EvalAggregate, EvalCase, EvalCaseResult, EvalReport } from './types';
 
@@ -53,6 +56,17 @@ export interface RunEvalOptions {
    * run produces — cosine without a reranker, cross-encoder relevance with one.
    */
   threshold?: number;
+  /**
+   * Optional LLM judge (`EVAL_JUDGE=true`); when set, non-abstained answerable cases that
+   * declare `expectedKeywords` also get an absolute correctness verdict — see {@link LlmJudge}.
+   */
+  judge?: LlmJudge;
+  /** USD per 1,000 prompt tokens, for the run's cost estimate. Defaults to 0. */
+  promptCostPer1k?: number;
+  /** USD per 1,000 completion tokens, for the run's cost estimate. Defaults to 0. */
+  completionCostPer1k?: number;
+  /** Optional query-expansion strategy; identity (raw question) when omitted. */
+  queryExpander?: QueryExpander;
 }
 
 /** Maps a file extension to a MIME type the handlers understand. */
@@ -125,8 +139,15 @@ export function isAnswerable(evalCase: EvalCase): boolean {
  * @param store The eval vector store.
  */
 async function ingestCorpus(options: RunEvalOptions, embedding: Awaited<ReturnType<typeof createEmbedding>>, store: VectorStore): Promise<void> {
-  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap });
-  const ingestor = new RagDataIngestor(chunker, resolveFileHandler, embedding, store, config.embeddingBatchSize);
+  const chunker = new RecursiveChunker({ chunkSize: config.chunkSize, overlap: config.chunkOverlap, unit: config.chunkUnit });
+  const ingestor = new RagDataIngestor(
+    chunker,
+    resolveFileHandler,
+    embedding,
+    store,
+    config.embeddingBatchSize,
+    config.chunkIncludeSectionContext
+  );
 
   const entries = await fs.readdir(options.corpusDir);
   const files: FileInfo[] = [];
@@ -160,10 +181,14 @@ async function scoreCase(
   const answerable = isAnswerable(evalCase);
   const retrievalStart = performance.now();
 
-  const [queryVector] = await embedding.embed([evalCase.question]);
-  // Mirror the orchestrator: with a reranker, fetch a wider pool, rerank, then cut to topK.
+  // Mirror the orchestrator: expand the query (identity by default), search once per
+  // expanded text, merge to a single candidate list, then — with a reranker — fetch a wider
+  // pool, rerank, and cut to topK.
+  const expansion = options.queryExpander ? await options.queryExpander.expand(evalCase.question) : { searchTexts: [evalCase.question] };
+  const searchVectors = await embedding.embed(expansion.searchTexts);
   const fetchK = options.reranker ? Math.max(options.topK, options.fetchK ?? options.topK) : options.topK;
-  const candidates = await store.search(queryVector, fetchK, options.tenantId);
+  const resultsPerSearch = await Promise.all(searchVectors.map((vector) => store.search(vector, fetchK, options.tenantId)));
+  const candidates = mergeSearchResults(resultsPerSearch, fetchK);
   const ranked = (await rerankCandidates(evalCase.question, candidates, options.reranker)).slice(0, options.topK);
   // Same cut production applies, so the eval scores the chunks the model would really see.
   const results = ranked.filter((result) => result.score >= threshold);
@@ -199,11 +224,19 @@ async function scoreCase(
   if (langModel) {
     try {
       const generationStart = performance.now();
-      const answer = await langModel.generateResponse({ question: evalCase.question, sources: results, maxTokens: config.maxTokens });
+      const generation = await langModel.generateResponse({ question: evalCase.question, sources: results, maxTokens: config.maxTokens });
       result.generationMs = performance.now() - generationStart;
-      result.answer = answer;
+      result.answer = generation.text;
 
-      const abstained = isAbstention(answer);
+      if (generation.usage) {
+        result.promptTokens = generation.usage.promptTokens;
+        result.completionTokens = generation.usage.completionTokens;
+        result.costUsd =
+          (generation.usage.promptTokens / 1000) * (options.promptCostPer1k ?? 0) +
+          (generation.usage.completionTokens / 1000) * (options.completionCostPer1k ?? 0);
+      }
+
+      const abstained = isAbstention(generation.text);
       result.abstained = abstained;
       result.abstentionCorrect = abstained === !answerable;
 
@@ -211,8 +244,19 @@ async function scoreCase(
       // has no content to score, and scoring it would punish a correct refusal for not
       // containing the keywords it was right to omit.
       if (!abstained) {
-        result.keywordCoverage = keywordCoverage(answer, evalCase.expectedKeywords ?? []);
-        result.groundedness = groundedness(answer, results.map((source) => source.content));
+        result.keywordCoverage = keywordCoverage(generation.text, evalCase.expectedKeywords ?? []);
+        result.groundedness = groundedness(generation.text, results.map((source) => source.content));
+
+        // The judge gives an absolute verdict where groundedness can only proxy one — but it
+        // needs an answer key to check against, so an unanswerable case (no expectedKeywords)
+        // or a case that declared none stays unjudged rather than scored against nothing.
+        if (options.judge && evalCase.expectedKeywords?.length) {
+          const verdict = await options.judge.judge(evalCase.question, generation.text, evalCase.expectedKeywords);
+          if (verdict) {
+            result.judgeCorrect = verdict.correct;
+            result.judgeReasoning = verdict.reasoning;
+          }
+        }
       }
     } catch (error) {
       logger.warn(`Generation failed for case ${evalCase.id}: ${error instanceof Error ? error.message : error}`);
@@ -288,6 +332,10 @@ function aggregate(results: EvalCaseResult[]): EvalAggregate {
     falseRetrievalRate: hasUnanswerable(results) ? falseRetrievalRate(retrievalOutcomes(results)) : undefined,
     retrievalMs: meanDefined(results.map((result) => result.retrievalMs)),
     generationMs: meanDefined(results.map((result) => result.generationMs)),
+    totalPromptTokens: sumDefined(results.map((result) => result.promptTokens)),
+    totalCompletionTokens: sumDefined(results.map((result) => result.completionTokens)),
+    totalCostUsd: sumDefined(results.map((result) => result.costUsd)),
+    judgeAccuracy: meanDefined(results.map((result) => (result.judgeCorrect === undefined ? undefined : result.judgeCorrect ? 1 : 0))),
   };
 }
 

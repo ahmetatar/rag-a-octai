@@ -1,5 +1,5 @@
 import { LlamaChatSession } from 'node-llama-cpp';
-import { LangModelBase, PromptContext } from './model-base';
+import { GenerationResult, LangModelBase, PromptContext } from './model-base';
 
 /**
  * Implementation of LangModel for Llama LLM manager.
@@ -32,7 +32,7 @@ export class LlamaLangModelRunner extends LangModelBase {
   }
 
   /** @inheritdoc */
-  async generateResponse(promptCtx: PromptContext): Promise<string> {
+  async generateResponse(promptCtx: PromptContext): Promise<GenerationResult> {
     throw new Error('Method not implemented.');
   }
 }

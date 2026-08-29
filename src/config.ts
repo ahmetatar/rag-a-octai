@@ -23,6 +23,24 @@ export default {
    * overlap costs ~15% more vectors and buys a boundary that no longer destroys meaning.
    */
   chunkOverlap: process.env.CHUNK_OVERLAP ? parseInt(process.env.CHUNK_OVERLAP) : 150,
+  /**
+   * What `chunkSize`/`chunkOverlap` are measured in. `characters` is cheap but a poor proxy
+   * for what actually limits an LLM — its context window is a token budget, and a character
+   * count over/undershoots it depending on the text's script and vocabulary. `tokens` (via
+   * the cl100k_base tokenizer, a general-purpose approximation — see
+   * `chunkers/token-length.ts`) measures chunk size the same way the model's limit is
+   * expressed. Defaults to `characters` so existing `CHUNK_SIZE`/`CHUNK_OVERLAP` values keep
+   * their current meaning.
+   */
+  chunkUnit: (process.env.CHUNK_UNIT === 'tokens' ? 'tokens' : 'characters') as 'characters' | 'tokens',
+  /**
+   * Prepend each chunk's section breadcrumb (e.g. "2. Components > 2.1 Kestrel collector") to
+   * its own embedded/generated text, not just its metadata. Off by default: measured on the
+   * eval corpus, it made retrieval WORSE (hitRate 98.0%→96.1%, MRR 0.971→0.951,
+   * falseRetrievalRate 33.3%→46.7%) — see `docs/rag-improvements-task-list.md`, section 4.
+   * `heading`/`sectionPath` land on every chunk's metadata regardless of this flag.
+   */
+  chunkIncludeSectionContext: process.env.CHUNK_INCLUDE_SECTION_CONTEXT === 'true',
   /** Number of chunks embedded per batch during ingestion */
   embeddingBatchSize: process.env.EMBEDDING_BATCH_SIZE ? parseInt(process.env.EMBEDDING_BATCH_SIZE) : 64,
   /** Number of top documents to retrieve */
@@ -39,6 +57,18 @@ export default {
   rerankModelPath: process.env.RERANK_MODEL_PATH ? path.resolve(process.env.RERANK_MODEL_PATH) : '',
   /** How many candidates to pull from vector search before reranking down to top-K */
   rerankFetchK: process.env.RERANK_FETCH_K ? parseInt(process.env.RERANK_FETCH_K) : 20,
+  /**
+   * Query-side expansion strategy: `none` (search with the raw question, zero extra cost),
+   * `rewrite` (one LLM call to clean up the question into a search phrase), `multi-query`
+   * (LLM generates several phrasings, all searched and merged), `hyde` (LLM writes a
+   * hypothetical answer passage and that gets embedded instead of the question). Every
+   * non-`none` strategy costs an extra LLM call per query. Defaults to `none` — see
+   * `docs/rag-improvements-task-list.md` for the measured effect of each on this corpus
+   * before turning one on.
+   */
+  queryStrategy: (['rewrite', 'multi-query', 'hyde'].includes(process.env.QUERY_STRATEGY ?? '')
+    ? process.env.QUERY_STRATEGY
+    : 'none') as 'none' | 'rewrite' | 'multi-query' | 'hyde',
   /** Maximum accepted length of a query string, in characters */
   maxQueryLength: process.env.MAX_QUERY_LENGTH ? parseInt(process.env.MAX_QUERY_LENGTH) : 2000,
   /** Embedding provider used for BOTH ingestion and querying ('ollama' | 'llama' | 'gemini') */
@@ -63,6 +93,18 @@ export default {
   chromaCollection: process.env.CHROMA_COLLECTION || 'docs',
   /** Maximum tokens for generation */
   maxTokens: process.env.MAX_TOKENS ? parseInt(process.env.MAX_TOKENS) : 1000,
+  /**
+   * USD cost per 1,000 prompt tokens, used by the eval harness to estimate generation spend.
+   * Defaults to 0 (self-hosted models have no per-token bill) — set it to price a run against
+   * a hosted model's rate card.
+   */
+  evalPromptCostPer1k: process.env.EVAL_PROMPT_COST_PER_1K_TOKENS ? parseFloat(process.env.EVAL_PROMPT_COST_PER_1K_TOKENS) : 0,
+  /** USD cost per 1,000 completion tokens; see {@link evalPromptCostPer1k}. */
+  evalCompletionCostPer1k: process.env.EVAL_COMPLETION_COST_PER_1K_TOKENS
+    ? parseFloat(process.env.EVAL_COMPLETION_COST_PER_1K_TOKENS)
+    : 0,
+  /** Model used by the eval harness's LLM judge (`EVAL_JUDGE=true`); defaults to the generation model. */
+  evalJudgeModel: process.env.EVAL_JUDGE_MODEL || '',
   /** Maximum size of a single uploaded file, in megabytes */
   maxUploadFileSizeMb: process.env.MAX_UPLOAD_FILE_SIZE_MB ? parseInt(process.env.MAX_UPLOAD_FILE_SIZE_MB) : 25,
   /** Maximum number of files accepted in one ingestion request */

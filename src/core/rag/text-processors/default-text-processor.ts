@@ -99,12 +99,22 @@ export class DefaultTextProcessor extends TextProcessor {
   }
 
   /**
-   * Fixes line breaks that occur within sentences.
+   * Fixes line breaks that occur within sentences — the PDF-extraction artifact of a hard
+   * line wrap mid-paragraph, which reads as a single stray `\n` between two lines of the same
+   * paragraph.
+   *
+   * A genuine paragraph break (`\n\n`) must survive untouched, not just its own two
+   * newlines: without the `\n` entry in the lookbehind, the SECOND newline of every `\n\n`
+   * pair is itself "a `\n` not preceded by [.!?:]" and gets joined into a space, silently
+   * collapsing every blank line in the document down to a single newline. That is invisible
+   * to a mid-paragraph reader, but it destroys the one signal a downstream heading/section
+   * detector (`splitIntoSections`) has for "this line stands alone as its own paragraph".
+   *
    * @param text Input text
    * @returns Text with fixed line breaks
    */
   private fixLineBreaks(text: string): string {
-    return text.replace(/(?<![.!?:])\n(?!\n)/g, ' ');
+    return text.replace(/(?<![.!?:\n])\n(?!\n)/g, ' ');
   }
 
   /**

@@ -16,7 +16,15 @@ beforeAll(async () => {
     req.on('end', () => {
       lastRequest = JSON.parse(body || '{}');
       res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify({ model: lastRequest.model, done: true, message: { role: 'assistant', content: 'ok' } }));
+      res.end(
+        JSON.stringify({
+          model: lastRequest.model,
+          done: true,
+          message: { role: 'assistant', content: 'ok' },
+          prompt_eval_count: 42,
+          eval_count: 7,
+        })
+      );
     });
   });
 
@@ -116,9 +124,12 @@ describe('OllamaLangModelRunner', () => {
     expect(systemMessage).toContain(NO_ANSWER_SENTINEL);
   });
 
-  it('returns the assistant message content', async () => {
+  it('returns the assistant message content and reported token usage', async () => {
     const runner = new OllamaLangModelRunner('test-model', host);
 
-    await expect(runner.generateResponse({ question: 'q?' })).resolves.toBe('ok');
+    await expect(runner.generateResponse({ question: 'q?' })).resolves.toEqual({
+      text: 'ok',
+      usage: { promptTokens: 42, completionTokens: 7 },
+    });
   });
 });

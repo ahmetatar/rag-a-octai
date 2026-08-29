@@ -13,6 +13,7 @@ import {
   recallAtK,
   reciprocalRank,
   snippetCoverage,
+  sumDefined,
 } from './metrics';
 
 /** Builds an outcome, so each test states only the field it is about. */
@@ -252,5 +253,15 @@ describe('meanDefined', () => {
 
   it('is undefined when no value is present', () => {
     expect(meanDefined([undefined, undefined])).toBeUndefined();
+  });
+});
+
+describe('sumDefined', () => {
+  it('sums only the values that are present', () => {
+    expect(sumDefined([1, undefined, 3])).toBe(4);
+  });
+
+  it('is undefined when no value is present', () => {
+    expect(sumDefined([undefined, undefined])).toBeUndefined();
   });
 });

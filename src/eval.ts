@@ -1,8 +1,8 @@
 import { promises as fs } from 'fs';
 import path from 'path';
 import config from '@app/config';
-import { createPdfPageFileHandler, createReranker, createTextFileHandler, registerFileHandlers } from '@core/rag';
-import { EvalReport, GateConfig, GateResult, evaluateGates, parseGateConfig, runEval } from '@core/rag/eval';
+import { createPdfPageFileHandler, createQueryExpander, createReranker, createTextFileHandler, registerFileHandlers } from '@core/rag';
+import { EvalReport, GateConfig, GateResult, LlmJudge, evaluateGates, parseGateConfig, runEval } from '@core/rag/eval';
 import { logger } from '@infrastructure/logging';
 
 const EVAL_DIR = path.resolve('eval');
@@ -21,6 +21,14 @@ const GATES_PATH = path.join(EVAL_DIR, 'gates.json');
  *
  * Set EVAL_GATE=true to exit non-zero when the run misses a threshold in eval/gates.json.
  * That is what CI runs; a local run reports the gates but never fails on them.
+ *
+ * Set EVAL_JUDGE=true to additionally have an LLM judge (EVAL_JUDGE_MODEL, default the
+ * generation model) give an absolute correctness verdict on answered cases — layered on top
+ * of the deterministic groundedness proxy, never gated (see {@link LlmJudge}). Requires
+ * EVAL_GENERATE=true.
+ *
+ * Honours QUERY_STRATEGY (none/rewrite/multi-query/hyde), so e.g.
+ * `QUERY_STRATEGY=hyde npm run eval` measures that expansion strategy against a plain run.
  */
 async function main(): Promise<void> {
   registerFileHandlers({
@@ -31,6 +39,12 @@ async function main(): Promise<void> {
   // Honours RERANK_ENABLED/RERANK_MODEL_PATH, so `RERANK_ENABLED=true npm run eval` measures
   // the reranked pipeline and can be compared against a plain run.
   const reranker = await createReranker();
+  const queryExpander = createQueryExpander();
+  const generateAnswers = process.env.EVAL_GENERATE === 'true';
+  const judge =
+    generateAnswers && process.env.EVAL_JUDGE === 'true'
+      ? new LlmJudge(config.evalJudgeModel || config.generationModel, config.ollamaHost)
+      : undefined;
 
   const report = await runEval({
     corpusDir: path.join(EVAL_DIR, 'corpus'),
@@ -38,15 +52,20 @@ async function main(): Promise<void> {
     collection: process.env.EVAL_COLLECTION || 'eval_harness',
     topK: config.topK,
     tenantId: 'eval',
-    generateAnswers: process.env.EVAL_GENERATE === 'true',
+    generateAnswers,
     reranker,
     fetchK: config.rerankFetchK,
     // Left undefined by default so the runner picks the threshold for the score scale this
     // run actually produces; EVAL_THRESHOLD sweeps it without touching the app config.
     threshold: process.env.EVAL_THRESHOLD ? parseFloat(process.env.EVAL_THRESHOLD) : undefined,
+    judge,
+    promptCostPer1k: config.evalPromptCostPer1k,
+    completionCostPer1k: config.evalCompletionCostPer1k,
+    queryExpander,
   });
 
   logger.info(`Reranking: ${reranker ? 'ON' : 'OFF'}`);
+  logger.info(`Query strategy: ${config.queryStrategy}`);
   printReport(report);
   await writeReport(report);
 
@@ -115,9 +134,18 @@ function printReport(report: EvalReport): void {
   if (report.generatedAnswers) {
     logger.info(`ANSWER                       kwCoverage=${pct(a.keywordCoverage)}  groundedness=${pct(a.groundedness)}`);
   }
+  if (a.judgeAccuracy !== undefined) {
+    logger.info(`JUDGE                        accuracy=${pct(a.judgeAccuracy)}`);
+  }
   logger.info(
     `LATENCY                      retrieval=${num(a.retrievalMs, 0)}ms  generation=${num(a.generationMs, 0)}ms`
   );
+  if (a.totalPromptTokens !== undefined || a.totalCompletionTokens !== undefined) {
+    const cost = a.totalCostUsd !== undefined ? `  cost=$${a.totalCostUsd.toFixed(4)}` : '';
+    logger.info(
+      `TOKENS                       prompt=${a.totalPromptTokens ?? 0}  completion=${a.totalCompletionTokens ?? 0}${cost}`
+    );
+  }
 
   printByTag(report);
 }

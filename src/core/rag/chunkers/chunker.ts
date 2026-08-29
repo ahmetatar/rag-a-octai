@@ -1,14 +1,26 @@
-import uuid from 'uuid';
+import { v4 as uuidv4 } from 'uuid';
 import { Document } from '../file-handlers';
+
+/**
+ * What `chunkSize`/`overlap` are measured in.
+ *
+ * `characters` is the historical default: cheap, but a poor proxy for what actually limits an
+ * LLM — its context window is a TOKEN budget, and a character count over- or under-shoots that
+ * budget depending on the script and vocabulary of the text. `tokens` measures chunk size the
+ * same way the model's limit is expressed.
+ */
+export type ChunkUnit = 'characters' | 'tokens';
 
 /**
  * Options for chunking text into smaller pieces.
  */
 export interface ChunkingOptions {
-  /** The maximum size of each chunk */
+  /** The maximum size of each chunk, in `unit`. */
   chunkSize: number;
-  /** The number of characters to overlap between chunks */
+  /** The amount of overlap between chunks, in `unit`. */
   overlap?: number;
+  /** What `chunkSize`/`overlap` are measured in. Defaults to `characters`. */
+  unit?: ChunkUnit;
 }
 
 /**
@@ -32,7 +44,7 @@ export abstract class Chunker {
    */
   protected createChunk(content: string, metadata?: Record<string, any>): Document {
     return {
-      id: `chunk-${uuid.v4()}`,
+      id: `chunk-${uuidv4()}`,
       content,
       metadata,
     };

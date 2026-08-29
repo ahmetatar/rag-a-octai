@@ -71,8 +71,18 @@ describe('RagDataIngestor.ingest', () => {
     await ingestor.ingest([FILE]);
 
     expect(upserted.flat()).toEqual([
-      { id: 'doc.txt#0', text: 'alpha', metadata: { source: 'doc.txt', mimeType: 'text/plain' }, embedding: [5] },
-      { id: 'doc.txt#1', text: 'beta', metadata: { source: 'doc.txt', mimeType: 'text/plain' }, embedding: [4] },
+      {
+        id: 'doc.txt#0',
+        text: 'alpha',
+        metadata: { source: 'doc.txt', mimeType: 'text/plain', chunk: 0, totalChunks: 2 },
+        embedding: [5],
+      },
+      {
+        id: 'doc.txt#1',
+        text: 'beta',
+        metadata: { source: 'doc.txt', mimeType: 'text/plain', chunk: 1, totalChunks: 2 },
+        embedding: [4],
+      },
     ]);
   });
 
@@ -165,5 +175,113 @@ describe('RagDataIngestor.ingest', () => {
 
     expect(resolveHandler).toHaveBeenCalledTimes(2);
     expect(seenContent).toEqual(['handled:text/plain', 'handled:application/pdf']);
+  });
+
+  it('tags each chunk with the heading path of the section it came from', async () => {
+    const structuredDoc = ['1. Overview', '', 'Top-level prose.', '', '2. Components', '', '2.1 Kestrel collector', '', 'Kestrel prose.'].join(
+      '\n'
+    );
+    const resolveHandler = vi.fn(() => ({ handleFile: async () => ({ content: structuredDoc }) }));
+    const upserted: UpsertItem[][] = [];
+
+    const ingestor = new RagDataIngestor(
+      // A pass-through chunker: one chunk per section body, so the test can see exactly what
+      // metadata the ingestor attached before the chunker ever ran.
+      { chunk: async (text: string, meta: Record<string, unknown>) => [{ content: text, metadata: meta }] } as never,
+      resolveHandler as never,
+      new (class extends BaseEmbedding {
+        async embed(texts: string | string[]) {
+          return (Array.isArray(texts) ? texts : [texts]).map(() => [0]);
+        }
+      })(),
+      { upsert: async (items: UpsertItem[]) => void upserted.push(items), deleteBySource: async () => undefined } as never
+    );
+
+    await ingestor.ingest([FILE]);
+
+    const bySection = Object.fromEntries(upserted.flat().map((item) => [item.metadata?.sectionPath ?? '(none)', item.text]));
+    // The content is prefixed with its own section breadcrumb (see the next test), so it
+    // ends with, rather than equals, the section's body.
+    expect(bySection['1. Overview']).toContain('Top-level prose.');
+    expect(bySection['2. Components > 2.1 Kestrel collector']).toContain('Kestrel prose.');
+    // "2. Components" itself has no body of its own (only its sub-heading does), so it
+    // contributes no chunk at all.
+    expect(Object.keys(bySection)).not.toContain('2. Components');
+
+    const overviewChunk = upserted.flat().find((item) => item.text.includes('Top-level prose.'));
+    expect(overviewChunk?.metadata?.heading).toBe('1. Overview');
+    const kestrelChunk = upserted.flat().find((item) => item.text.includes('Kestrel prose.'));
+    expect(kestrelChunk?.metadata?.heading).toBe('2.1 Kestrel collector');
+  });
+
+  it('prepends the section breadcrumb to each chunk of that section, not just the first', async () => {
+    const structuredDoc = ['1. Overview', '', 'Sentence one. Sentence two.'].join('\n');
+    const resolveHandler = vi.fn(() => ({ handleFile: async () => ({ content: structuredDoc }) }));
+    const upserted: UpsertItem[][] = [];
+
+    const ingestor = new RagDataIngestor(
+      // Splits the section body into two chunks, so the test can see the breadcrumb reach
+      // BOTH — not just get glued onto the section's raw text once before splitting.
+      { chunk: async (text: string, meta: Record<string, unknown>) => text.split('. ').map((part) => ({ content: part, metadata: meta })) } as never,
+      resolveHandler as never,
+      new (class extends BaseEmbedding {
+        async embed(texts: string | string[]) {
+          return (Array.isArray(texts) ? texts : [texts]).map(() => [0]);
+        }
+      })(),
+      { upsert: async (items: UpsertItem[]) => void upserted.push(items), deleteBySource: async () => undefined } as never,
+      64,
+      true // includeSectionContext — off by default; this test exists to prove the ON path
+    );
+
+    await ingestor.ingest([FILE]);
+
+    const texts = upserted.flat().map((item) => item.text);
+    expect(texts).toHaveLength(2);
+    expect(texts.every((text) => text.startsWith('1. Overview\n\n'))).toBe(true);
+  });
+
+  it('does not prepend a breadcrumb to a chunk with no heading path, even with the flag on', async () => {
+    const resolveHandler = vi.fn(() => ({ handleFile: async () => ({ content: 'Unstructured content with no heading at all.' }) }));
+    const upserted: UpsertItem[][] = [];
+
+    const ingestor = new RagDataIngestor(
+      { chunk: async (text: string, meta: Record<string, unknown>) => [{ content: text, metadata: meta }] } as never,
+      resolveHandler as never,
+      new (class extends BaseEmbedding {
+        async embed(texts: string | string[]) {
+          return (Array.isArray(texts) ? texts : [texts]).map(() => [0]);
+        }
+      })(),
+      { upsert: async (items: UpsertItem[]) => void upserted.push(items), deleteBySource: async () => undefined } as never,
+      64,
+      true
+    );
+
+    await ingestor.ingest([FILE]);
+
+    expect(upserted.flat()[0].text).toBe('Unstructured content with no heading at all.');
+  });
+
+  it('leaves chunk content unchanged by default (includeSectionContext defaults to false)', async () => {
+    const structuredDoc = ['1. Overview', '', 'Top-level prose.'].join('\n');
+    const resolveHandler = vi.fn(() => ({ handleFile: async () => ({ content: structuredDoc }) }));
+    const upserted: UpsertItem[][] = [];
+
+    const ingestor = new RagDataIngestor(
+      { chunk: async (text: string, meta: Record<string, unknown>) => [{ content: text, metadata: meta }] } as never,
+      resolveHandler as never,
+      new (class extends BaseEmbedding {
+        async embed(texts: string | string[]) {
+          return (Array.isArray(texts) ? texts : [texts]).map(() => [0]);
+        }
+      })(),
+      { upsert: async (items: UpsertItem[]) => void upserted.push(items), deleteBySource: async () => undefined } as never
+      // includeSectionContext omitted — must default to false.
+    );
+
+    await ingestor.ingest([FILE]);
+
+    expect(upserted.flat()[0].text).toBe('Top-level prose.');
   });
 });
